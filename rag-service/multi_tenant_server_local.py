@@ -281,7 +281,65 @@ def run_full_ingestion_for_user(pdf_path: str, user_id: int, progress_callback=N
         cleaned_chunks.append(chunk)
 
     chunks = cleaned_chunks
-    logger.info(f"Step 4b done: {len(chunks)} chunks after filtering (removed {len(cleaned_chunks)} from original pool).")
+    logger.info(f"Step 4b done: {len(chunks)} chunks after filtering.")
+
+    # ─── Step 4c: Fix Chapter Labels ─────────────────────────────────────
+    # The hierarchy builder sometimes mislabels main body content as Appendix.
+    # Fix: detect and rename mislabeled chapters based on content analysis.
+    emit_progress("chunking", 57, "Fixing chapter labels...")
+    _MAIN_BODY_SECTIONS = [
+        '2.2', '2.3', '2.4', '2.5', '2.6',  # Methodology
+        '3.1', '3.2', '3.3',  # Recommendations
+        '4.1', '4.2', '4.3',  # Implementation
+        '5.1', '5.2', '5.3', '5.4',  # Future
+    ]
+    _FIXED_COUNT = 0
+    for chunk in chunks:
+        ch = chunk.chapter or ''
+        sec = chunk.section or ''
+        content = chunk.content or ''
+
+        # Fix: "Appendix 1 lists the contributors..." contains main body
+        if 'Appendix 1 lists the contributors' in ch:
+            # Check if this chunk has main body section markers
+            is_main_body = False
+            for marker in _MAIN_BODY_SECTIONS:
+                if marker in sec or marker in content[:300]:
+                    is_main_body = True
+                    break
+            if is_main_body:
+                chunk.chapter = 'Main Body'
+                _FIXED_COUNT += 1
+
+        # Fix: Glossary chunks should include the term as section
+        if ch == 'Glossary' and not sec:
+            # Extract the first term/definition from content
+            lines = content.split('\n')
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith('#') and not line.startswith('|') and len(line) > 5:
+                    chunk.section = line[:80]
+                    _FIXED_COUNT += 1
+                    break
+
+    if _FIXED_COUNT > 0:
+        logger.info(f"Step 4c: Fixed {_FIXED_COUNT} chapter labels.")
+
+    # ─── Step 4d: Clean Chapter Headers from Content ──────────────────────
+    # Remove misidentified chapter headers that pollute chunk content
+    _NOISE_PATTERNS = [
+        r'##\s*Appendix\s+\d+\s+lists\s+the\s+contributors.*?(?=###|$)',
+        r'##\s*Appendix\s+\d+\s+describes.*?(?=###|$)',
+        r'##\s*Front\s+Matter.*?(?=\n\n|$)',
+    ]
+    for chunk in chunks:
+        content = chunk.content or ''
+        for pattern in _NOISE_PATTERNS:
+            content = _re.sub(pattern, '', content, flags=_re.DOTALL | _re.IGNORECASE)
+        content = content.strip()
+        if content != chunk.content:
+            chunk.content = content
+            chunk.token_count = len(content.split()) * 2
 
     # Export chunks to user-specific directory
     chunks_json_path = os.path.join(chunks_dir, "chunks.json")
@@ -661,10 +719,10 @@ def chat():
         all_points = search_result.points if search_result.points else []        # Step 1: Apply chapter-based score boost/penalty
         # Main content chapters get a boost, Glossary/Appendix get a penalty
         # This ensures the most useful content ranks higher
-        _BOOST_CHAPTERS = ['Chapter', 'Introduction', 'Methods', 'Results', 'Discussion']
+        _BOOST_CHAPTERS = ['Main Body', 'Chapter', 'Introduction', 'Methods', 'Results', 'Discussion']
         _PENALTY_CHAPTERS = ['Glossary', 'Appendix', 'References', 'Annex', 'Index']
-        _CHAPTER_PENALTY = 0.15  # Reduce score by15% for glossary/appendix
-        _CHAPTER_BOOST = 0.05    # Increase score by 5% for main chapters
+        _CHAPTER_PENALTY = 0.25  # Reduce score by 25% for glossary/appendix
+        _CHAPTER_BOOST = 0.10    # Increase score by 10% for main chapters
 
         adjusted_points = []
         for point in all_points:
