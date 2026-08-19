@@ -716,28 +716,103 @@ def chat():
             limit=initial_k,
         )
 
-        all_points = search_result.points if search_result.points else []        # Step 1: Apply chapter-based score boost/penalty
-        # Main content chapters get a boost, Glossary/Appendix get a penalty
-        # This ensures the most useful content ranks higher
-        _BOOST_CHAPTERS = ['Main Body', 'Chapter', 'Introduction', 'Methods', 'Results', 'Discussion']
-        _PENALTY_CHAPTERS = ['Glossary', 'Appendix', 'References', 'Annex', 'Index']
-        _CHAPTER_PENALTY = 0.25  # Reduce score by 25% for glossary/appendix
-        _CHAPTER_BOOST = 0.10    # Increase score by 10% for main chapters
+        all_points = search_result.points if search_result.points else []
 
+        # ═══════════════════════════════════════════════════════════════════
+        # QUERY-AWARE RANKING
+        # Combines: dense similarity + lexical matching + section relevance
+        # ═══════════════════════════════════════════════════════════════════
+        import re as _re
+
+        # --- Step 1: Detect query intent ---
+        _query_lower = message.strip().lower()
+        _query_words = set(_re.findall(r'\b[a-zA-Z0-9\u0600-\u06FF]{2,}\b', _query_lower))
+
+        # Definition intent: "what is X", "define X", "ايه هو X"
+        _DEFINITION_PATTERNS = [
+            r'^what\s+is\b', r'^define\b', r'^explain\b',
+            r'^how\s+is\b', r'^who\s+is\b',
+            r'\u0627\u064a\u0647\s+\u0647\u0648\b', r'\u0645\u0627\u0647\u0648\b',  # ايه هو, ما هو
+            r'\u0627\u0646\u0648\u0627\u0639\b',  # انواع
+        ]
+        _is_definition_query = any(_re.search(p, _query_lower) for p in _DEFINITION_PATTERNS)
+
+        # Treatment/recommendation intent
+        _TREATMENT_PATTERNS = [
+            r'\b treatment \b', r'\b recommend\b', r'\b manage\b',
+            r'\b therapy\b', r'\b dose\b', r'\b give\b', r'\b use\b',
+            r'\badminister\b', r'\b prescribe\b',
+            r'\u0627\u0644\u0639\u0644\u0627\u062c',  # العلاج
+        ]
+        _is_treatment_query = any(_re.search(p, _query_lower) for p in _TREATMENT_PATTERNS)
+
+        # --- Step 2: Extract key entity from query ---
+        # Remove common question words to get the core entity
+        _STOP_WORDS = {'what', 'is', 'are', 'the', 'a', 'an', 'how', 'does', 'do',
+                       'can', 'should', 'for', 'in', 'of', 'to', 'and', 'or', 'if',
+                       'with', 'about', 'that', 'this', 'which', 'who', 'where',
+                       '\u0627\u064a\u0647', '\u0645\u0627', '\u0647\u0648', '\u0645\u0646',
+                       '\u0641\u064a', '\u0639\u0644\u0649', '\u0627\u0644\u0630\u064a'}
+        _entity_words = _query_words - _STOP_WORDS
+
+        # --- Step 3: Score each candidate with query-aware ranking ---
         adjusted_points = []
         for point in all_points:
             meta = point.payload.get("metadata", {}) if point.payload else {}
             chapter = meta.get("chapter", "")
-            adjusted_score = point.score
+            section = meta.get("section", "")
+            content = point.payload.get("content", "") if point.payload else ""
+            content_lower = content.lower()
 
-            # Apply penalty for Glossary/Appendix
-            if any(chapter.startswith(p) for p in _PENALTY_CHAPTERS):
-                adjusted_score *= (1 - _CHAPTER_PENALTY)
-            # Apply boost for main content
-            elif any(chapter.startswith(b) for b in _BOOST_CHAPTERS):
-                adjusted_score *= (1 + _CHAPTER_BOOST)
+            adjusted_score = point.score  # Start with dense similarity
 
-            # Create a copy-like object with adjusted score
+            # ═══ LEXICAL BOOST: Exact term matching ═══
+            # If chunk contains the key entity words, boost it significantly
+            if _entity_words:
+                matched = sum(1 for w in _entity_words if w in content_lower)
+                match_ratio = matched / len(_entity_words)
+                # Strong boost: up to +0.30 for full match
+                lexical_boost = match_ratio * 0.30
+                adjusted_score += lexical_boost
+                # Extra boost: if all entity words found, multiply
+                if match_ratio >= 0.8:
+                    adjusted_score *= 1.15
+
+            # ═══ SECTION RELEVANCE: Query-aware section matching ═══
+            chapter_lower = chapter.lower()
+            section_lower = section.lower()
+
+            if _is_definition_query:
+                # Definition queries: strongly favor Glossary/Definitions
+                if 'glossary' in chapter_lower or 'definition' in chapter_lower:
+                    adjusted_score *= 1.30  # +30% for glossary on definition queries
+                elif 'main body' in chapter_lower:
+                    adjusted_score *= 1.05  # Small boost for main body
+                elif 'appendix' in chapter_lower:
+                    adjusted_score *= 0.85  # Slight penalty for appendix
+
+            elif _is_treatment_query:
+                # Treatment queries: favor Main Body recommendations
+                if 'main body' in chapter_lower:
+                    adjusted_score *= 1.20  # +20% for main body on treatment queries
+                elif 'appendix' in chapter_lower and ('treatment' in section_lower or 'recommend' in section_lower):
+                    adjusted_score *= 1.10  # +10% for treatment appendices
+                elif 'glossary' in chapter_lower:
+                    adjusted_score *= 0.80  # -20% for glossary on treatment queries
+                elif 'reference' in chapter_lower or 'acknowledgement' in chapter_lower:
+                    adjusted_score *= 0.70  # -30% for references
+
+            else:
+                # General queries: balanced approach
+                if 'main body' in chapter_lower:
+                    adjusted_score *= 1.10  # +10% for main body
+                elif 'glossary' in chapter_lower:
+                    adjusted_score *= 1.05  # +5% for glossary (might have definitions)
+                elif 'appendix' in chapter_lower:
+                    adjusted_score *= 0.90  # -10% for appendix
+                elif 'reference' in chapter_lower:
+                    adjusted_score *= 0.75  # -25% for references
+
             adjusted_points.append((point, adjusted_score))
 
         # Step 2: Sort by adjusted score descending
