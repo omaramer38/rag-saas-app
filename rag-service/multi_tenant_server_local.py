@@ -419,6 +419,96 @@ def run_full_ingestion_for_user(pdf_path: str, user_id: int, progress_callback=N
     return result
 
 
+# ─── LLM Answer Generation ──────────────────────────────────────────────────
+
+def _generate_answer_with_llm(query: str, context: str, sources: list, lang: str) -> str:
+    """Generate a coherent answer from retrieved sources using Cohere LLM."""
+    cohere_key = os.environ.get("COHERE_API_KEY", "").strip()
+    if not cohere_key:
+        # Fallback: format sources manually
+        return _format_sources_answer(sources)
+
+    try:
+        import cohere
+        client = cohere.Client(api_key=cohere_key)
+
+        # Build numbered source context
+        source_blocks = []
+        for i, src in enumerate(sources, 1):
+            ch = src.get('chapter', '')
+            sec = src.get('section', '')
+            page = f"p.{src.get('page_start', '?')}"
+            location = " > ".join(filter(None, [ch, sec, page]))
+            source_blocks.append(f"[Source {i}] ({location})\n{src.get('content', '')}")
+
+        source_text = "\n\n".join(source_blocks)
+
+        # Language-specific system prompt
+        if lang == 'arabic':
+            system_prompt = (
+                "You are a medical information assistant. Answer the user's question using ONLY the provided sources. "
+                "Respond in clear, natural Arabic. Write medical terms in Arabic with English in parentheses. "
+                "If the sources don't contain enough information, say so clearly. "
+                "Do NOT make up information. Do NOT use outside knowledge."
+            )
+        else:
+            system_prompt = (
+                "You are a medical information assistant. Answer the user's question using ONLY the provided sources. "
+                "Respond in clear, professional English. "
+                "If the sources don't contain enough information, say so clearly. "
+                "Do NOT make up information. Do NOT use outside knowledge."
+            )
+
+        user_message = f"""Sources:\n{source_text}\n\nQuestion: {query}\n\nAnswer based on the sources above:"""
+
+        response = client.chat(
+            model="command-r-08-2024",
+            message=user_message,
+            preamble=system_prompt,
+            max_tokens=1024,
+            temperature=0.3,
+        )
+
+        llm_answer = response.text.strip()
+        if llm_answer:
+            # Add source references
+            source_refs = []
+            for i, src in enumerate(sources, 1):
+                ch = src.get('chapter', '')
+                sec = src.get('section', '')
+                page = f"p.{src.get('page_start', '?')}"
+                score_pct = round(src.get('score', 0) * 100, 1)
+                location = " > ".join(filter(None, [ch, sec, page]))
+                source_refs.append(f"**[Source {i}]** ({location}) — {score_pct}%")
+
+            refs_text = "\n\n---\n\n📚 **Sources:**\n" + "\n".join(source_refs)
+            return llm_answer + refs_text
+
+    except Exception as e:
+        logger.warning(f"LLM generation failed: {e}, falling back to source formatting")
+
+    return _format_sources_answer(sources)
+
+
+def _format_sources_answer(sources: list) -> str:
+    """Fallback: format sources as a structured answer without LLM."""
+    if not sources:
+        return "No relevant information found."
+
+    answer_parts = []
+    for src in sources:
+        ch = src.get('chapter', '') if src.get('chapter', '') != 'Unknown' else ''
+        sec = src.get('section', '')
+        page = f"p.{src.get('page_start', '?')}" if src.get('page_start', '?') != '?' else ''
+        location = " > ".join(filter(None, [ch, sec, page]))
+        score_pct = round(src.get('score', 0) * 100, 1)
+        answer_parts.append(
+            f"**[Source {src['index']}]** ({location}) — Relevance: {score_pct}%\n\n"
+            f"{src['content']}"
+        )
+    return "\n\n---\n\n".join(answer_parts)
+
+
 # ─── API Endpoints ────────────────────────────────────────────────────────
 
 @app.route("/api/v1/health", methods=["GET"])
@@ -607,21 +697,43 @@ def chat():
             limit=initial_k,
         )
 
-        all_points = search_result.points if search_result.points else []
+        all_points = search_result.points if search_result.points else []        # Step 1: Apply chapter-based score boost/penalty
+        # Main content chapters get a boost, Glossary/Appendix get a penalty
+        # This ensures the most useful content ranks higher
+        _BOOST_CHAPTERS = ['Chapter', 'Introduction', 'Methods', 'Results', 'Discussion']
+        _PENALTY_CHAPTERS = ['Glossary', 'Appendix', 'References', 'Annex', 'Index']
+        _CHAPTER_PENALTY = 0.15  # Reduce score by15% for glossary/appendix
+        _CHAPTER_BOOST = 0.05    # Increase score by 5% for main chapters
 
-        # Step 1: Sort all results by score descending
-        sorted_points = sorted(all_points, key=lambda p: p.score, reverse=True)
+        adjusted_points = []
+        for point in all_points:
+            meta = point.payload.get("metadata", {}) if point.payload else {}
+            chapter = meta.get("chapter", "")
+            adjusted_score = point.score
 
-        # Step 2: Relative score cutoff — keep only results within % of top score
-        top_score = sorted_points[0].score if sorted_points else 0
-        SCORE_RELATIVE_THRESHOLD = 0.80  # Keep results within 80% of best score
+            # Apply penalty for Glossary/Appendix
+            if any(chapter.startswith(p) for p in _PENALTY_CHAPTERS):
+                adjusted_score *= (1 - _CHAPTER_PENALTY)
+            # Apply boost for main content
+            elif any(chapter.startswith(b) for b in _BOOST_CHAPTERS):
+                adjusted_score *= (1 + _CHAPTER_BOOST)
+
+            # Create a copy-like object with adjusted score
+            adjusted_points.append((point, adjusted_score))
+
+        # Step 2: Sort by adjusted score descending
+        adjusted_points.sort(key=lambda x: x[1], reverse=True)
+
+        # Step 3: Relative score cutoff — keep only results within % of best
+        top_score = adjusted_points[0][1] if adjusted_points else 0
+        SCORE_RELATIVE_THRESHOLD = 0.80
         relative_min = top_score * SCORE_RELATIVE_THRESHOLD
 
-        # Step 3: Deduplicate + collect
+        # Step 4: Deduplicate + collect
         seen_contents = set()
         chunks_data = []
 
-        for point in sorted_points:
+        for point, adj_score in adjusted_points:
             payload = point.payload or {}
             content = payload.get("content", "")
             meta = payload.get("metadata", {})
@@ -629,7 +741,7 @@ def chat():
                 continue
 
             # Skip if below relative threshold
-            if point.score < relative_min:
+            if adj_score < relative_min:
                 break
 
             # Content dedup (first 200 chars)
@@ -637,12 +749,14 @@ def chat():
             content_hash = hash(content_key)
             if content_hash in seen_contents:
                 continue
+
             seen_contents.add(content_hash)
 
             chunks_data.append({
                 "chunk_id": payload.get("chunk_id", str(point.id)),
                 "content": content,
-                "score": round(point.score, 4),
+                "score": round(point.score, 4),  # Keep original score for display
+                "adjusted_score": round(adj_score, 4),
                 "metadata": meta,
                 "table_references": payload.get("table_references", []),
                 "figure_references": payload.get("figure_references", []),
@@ -674,20 +788,9 @@ def chat():
 
         context = "\n\n---\n\n".join(context_parts)
 
-        # Build answer with actual content from sources
+        # Generate answer using Cohere LLM if available, otherwise format sources
         if context.strip():
-            answer_parts = []
-            for src in sources:
-                ch = src['chapter'] if src['chapter'] and src['chapter'] != 'Unknown' else ''
-                sec = src['section'] if src['section'] else ''
-                page = f"p.{src['page_start']}" if src['page_start'] != '?' else ''
-                location = " > ".join(filter(None, [ch, sec, page]))
-                score_pct = round(src['score'] * 100, 1)
-                answer_parts.append(
-                    f"**[Source {src['index']}]** ({location}) — Relevance: {score_pct}%\n\n"
-                    f"{src['content']}"
-                )
-            answer = "\n\n---\n\n".join(answer_parts)
+            answer = _generate_answer_with_llm(message, context, sources, lang)
         else:
             answer = "No relevant information found in the uploaded document. Please make sure you have uploaded a PDF file."
 
@@ -830,7 +933,8 @@ def user_metrics(user_id: int):
         # Use each chunk's content as a benchmark query
         # The ground truth is the chunk itself
         import random
-        sample_size = min(10, len(all_points))
+        random.seed(42)  # Fixed seed for deterministic results
+        sample_size = min(20, len(all_points))  # Use more samples for better accuracy
         sample_points = random.sample(all_points, sample_size)
 
         embedder = QueryEmbedder(cfg=DEFAULT_CONFIG)
