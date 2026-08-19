@@ -422,91 +422,52 @@ def run_full_ingestion_for_user(pdf_path: str, user_id: int, progress_callback=N
 # ─── LLM Answer Generation ──────────────────────────────────────────────────
 
 def _generate_answer_with_llm(query: str, context: str, sources: list, lang: str) -> str:
-    """Generate a coherent answer from retrieved sources using Cohere LLM."""
-    cohere_key = os.environ.get("COHERE_API_KEY", "").strip()
-    if not cohere_key:
-        # Fallback: format sources manually
-        return _format_sources_answer(sources)
-
-    try:
-        import cohere
-        client = cohere.Client(api_key=cohere_key)
-
-        # Build numbered source context
-        source_blocks = []
-        for i, src in enumerate(sources, 1):
-            ch = src.get('chapter', '')
-            sec = src.get('section', '')
-            page = f"p.{src.get('page_start', '?')}"
-            location = " > ".join(filter(None, [ch, sec, page]))
-            source_blocks.append(f"[Source {i}] ({location})\n{src.get('content', '')}")
-
-        source_text = "\n\n".join(source_blocks)
-
-        # Language-specific system prompt
-        if lang == 'arabic':
-            system_prompt = (
-                "You are a medical information assistant. Answer the user's question using ONLY the provided sources. "
-                "Respond in clear, natural Arabic. Write medical terms in Arabic with English in parentheses. "
-                "If the sources don't contain enough information, say so clearly. "
-                "Do NOT make up information. Do NOT use outside knowledge."
-            )
-        else:
-            system_prompt = (
-                "You are a medical information assistant. Answer the user's question using ONLY the provided sources. "
-                "Respond in clear, professional English. "
-                "If the sources don't contain enough information, say so clearly. "
-                "Do NOT make up information. Do NOT use outside knowledge."
-            )
-
-        user_message = f"""Sources:\n{source_text}\n\nQuestion: {query}\n\nAnswer based on the sources above:"""
-
-        response = client.chat(
-            model="command-r-08-2024",
-            message=user_message,
-            preamble=system_prompt,
-            max_tokens=1024,
-            temperature=0.3,
-        )
-
-        llm_answer = response.text.strip()
-        if llm_answer:
-            # Add source references
-            source_refs = []
-            for i, src in enumerate(sources, 1):
-                ch = src.get('chapter', '')
-                sec = src.get('section', '')
-                page = f"p.{src.get('page_start', '?')}"
-                score_pct = round(src.get('score', 0) * 100, 1)
-                location = " > ".join(filter(None, [ch, sec, page]))
-                source_refs.append(f"**[Source {i}]** ({location}) — {score_pct}%")
-
-            refs_text = "\n\n---\n\n📚 **Sources:**\n" + "\n".join(source_refs)
-            return llm_answer + refs_text
-
-    except Exception as e:
-        logger.warning(f"LLM generation failed: {e}, falling back to source formatting")
-
+    """
+    Generate a coherent answer from retrieved sources.
+    Uses fast source formatting (no external LLM) for speed.
+    The frontend renders the sources as cards.
+    """
     return _format_sources_answer(sources)
 
 
 def _format_sources_answer(sources: list) -> str:
-    """Fallback: format sources as a structured answer without LLM."""
+    """Format sources as a clean structured answer."""
     if not sources:
-        return "No relevant information found."
+        return "No relevant information found in the uploaded document."
 
-    answer_parts = []
+    # Build the answer from the most relevant source content
+    # Source 1 content becomes the main answer, others are references
+    main_source = sources[0]
+    ch = main_source.get('chapter', '') or ''
+    sec = main_source.get('section', '') or ''
+    page = main_source.get('page_start', '?')
+    location = ' > '.join(filter(None, [ch, sec, f'p.{page}']))
+    score_pct = round(main_source.get('score', 0) * 100, 1)
+
+    # Clean the content - remove markdown headers and tables for readability
+    content = main_source.get('content', '').strip()
+    # Remove markdown table formatting
+    import re
+    content = re.sub(r'\|\s*-+\s*\|', '', content)  # Remove table separators
+    content = re.sub(r'\|\s*$', '', content, flags=re.MULTILINE)  # Remove trailing pipes
+    content = re.sub(r'^\|\s*', '', content, flags=re.MULTILINE)  # Remove leading pipes
+    content = re.sub(r'\|{2,}', '\n', content)  # Double pipes to newline
+    content = content.strip()
+
+    answer = f"Based on the document ({location}):\n\n{content}"
+
+    # Add source references
+    refs = []
     for src in sources:
-        ch = src.get('chapter', '') if src.get('chapter', '') != 'Unknown' else ''
-        sec = src.get('section', '')
-        page = f"p.{src.get('page_start', '?')}" if src.get('page_start', '?') != '?' else ''
-        location = " > ".join(filter(None, [ch, sec, page]))
-        score_pct = round(src.get('score', 0) * 100, 1)
-        answer_parts.append(
-            f"**[Source {src['index']}]** ({location}) — Relevance: {score_pct}%\n\n"
-            f"{src['content']}"
-        )
-    return "\n\n---\n\n".join(answer_parts)
+        s_ch = src.get('chapter', '') or ''
+        s_sec = src.get('section', '') or ''
+        s_page = src.get('page_start', '?')
+        s_loc = ' > '.join(filter(None, [s_ch, s_sec, f'p.{s_page}']))
+        s_score = round(src.get('score', 0) * 100, 1)
+        refs.append(f"[Source {src['index']}] {s_loc} ({s_score}%)")
+
+    answer += "\n\n---\n\nSources:\n" + "\n".join(refs)
+    return answer
 
 
 # ─── API Endpoints ────────────────────────────────────────────────────────
