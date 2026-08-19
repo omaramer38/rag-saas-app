@@ -719,144 +719,76 @@ def chat():
         all_points = search_result.points if search_result.points else []
 
         # ═══════════════════════════════════════════════════════════════════
-        # QUERY-AWARE RANKING
-        # Combines: dense similarity + lexical matching + section relevance
+        # STAGE 2: COHERE RERANK (primary ranking mechanism)
+        # Dense retrieval returns candidates, reranker determines final order
         # ═══════════════════════════════════════════════════════════════════
+
+        # Collect top 20 candidates from dense retrieval
         import re as _re
-
-        # --- Step 1: Detect query intent ---
-        _query_lower = message.strip().lower()
-        _query_words = set(_re.findall(r'\b[a-zA-Z0-9\u0600-\u06FF]{2,}\b', _query_lower))
-
-        # Definition intent: "what is X", "define X", "ايه هو X"
-        _DEFINITION_PATTERNS = [
-            r'^what\s+is\b', r'^define\b', r'^explain\b',
-            r'^how\s+is\b', r'^who\s+is\b',
-            r'\u0627\u064a\u0647\s+\u0647\u0648\b', r'\u0645\u0627\u0647\u0648\b',  # ايه هو, ما هو
-            r'\u0627\u0646\u0648\u0627\u0639\b',  # انواع
-        ]
-        _is_definition_query = any(_re.search(p, _query_lower) for p in _DEFINITION_PATTERNS)
-
-        # Treatment/recommendation intent
-        _TREATMENT_PATTERNS = [
-            r'\b treatment \b', r'\b recommend\b', r'\b manage\b',
-            r'\b therapy\b', r'\b dose\b', r'\b give\b', r'\b use\b',
-            r'\badminister\b', r'\b prescribe\b',
-            r'\u0627\u0644\u0639\u0644\u0627\u062c',  # العلاج
-        ]
-        _is_treatment_query = any(_re.search(p, _query_lower) for p in _TREATMENT_PATTERNS)
-
-        # --- Step 2: Extract key entity from query ---
-        # Remove common question words to get the core entity
-        _STOP_WORDS = {'what', 'is', 'are', 'the', 'a', 'an', 'how', 'does', 'do',
-                       'can', 'should', 'for', 'in', 'of', 'to', 'and', 'or', 'if',
-                       'with', 'about', 'that', 'this', 'which', 'who', 'where',
-                       '\u0627\u064a\u0647', '\u0645\u0627', '\u0647\u0648', '\u0645\u0646',
-                       '\u0641\u064a', '\u0639\u0644\u0649', '\u0627\u0644\u0630\u064a'}
-        _entity_words = _query_words - _STOP_WORDS
-
-        # --- Step 3: Score each candidate with query-aware ranking ---
-        adjusted_points = []
-        for point in all_points:
-            meta = point.payload.get("metadata", {}) if point.payload else {}
-            chapter = meta.get("chapter", "")
-            section = meta.get("section", "")
-            content = point.payload.get("content", "") if point.payload else ""
-            content_lower = content.lower()
-
-            adjusted_score = point.score  # Start with dense similarity
-
-            # ═══ LEXICAL BOOST: Exact term matching ═══
-            # If chunk contains the key entity words, boost it significantly
-            if _entity_words:
-                matched = sum(1 for w in _entity_words if w in content_lower)
-                match_ratio = matched / len(_entity_words)
-                # Strong boost: up to +0.30 for full match
-                lexical_boost = match_ratio * 0.30
-                adjusted_score += lexical_boost
-                # Extra boost: if all entity words found, multiply
-                if match_ratio >= 0.8:
-                    adjusted_score *= 1.15
-
-            # ═══ SECTION RELEVANCE: Query-aware section matching ═══
-            chapter_lower = chapter.lower()
-            section_lower = section.lower()
-
-            if _is_definition_query:
-                # Definition queries: strongly favor Glossary/Definitions
-                if 'glossary' in chapter_lower or 'definition' in chapter_lower:
-                    adjusted_score *= 1.30  # +30% for glossary on definition queries
-                elif 'main body' in chapter_lower:
-                    adjusted_score *= 1.05  # Small boost for main body
-                elif 'appendix' in chapter_lower:
-                    adjusted_score *= 0.85  # Slight penalty for appendix
-
-            elif _is_treatment_query:
-                # Treatment queries: favor Main Body recommendations
-                if 'main body' in chapter_lower:
-                    adjusted_score *= 1.20  # +20% for main body on treatment queries
-                elif 'appendix' in chapter_lower and ('treatment' in section_lower or 'recommend' in section_lower):
-                    adjusted_score *= 1.10  # +10% for treatment appendices
-                elif 'glossary' in chapter_lower:
-                    adjusted_score *= 0.80  # -20% for glossary on treatment queries
-                elif 'reference' in chapter_lower or 'acknowledgement' in chapter_lower:
-                    adjusted_score *= 0.70  # -30% for references
-
-            else:
-                # General queries: balanced approach
-                if 'main body' in chapter_lower:
-                    adjusted_score *= 1.10  # +10% for main body
-                elif 'glossary' in chapter_lower:
-                    adjusted_score *= 1.05  # +5% for glossary (might have definitions)
-                elif 'appendix' in chapter_lower:
-                    adjusted_score *= 0.90  # -10% for appendix
-                elif 'reference' in chapter_lower:
-                    adjusted_score *= 0.75  # -25% for references
-
-            adjusted_points.append((point, adjusted_score))
-
-        # Step 2: Sort by adjusted score descending
-        adjusted_points.sort(key=lambda x: x[1], reverse=True)
-
-        # Step 3: Relative score cutoff — keep only results within % of best
-        top_score = adjusted_points[0][1] if adjusted_points else 0
-        SCORE_RELATIVE_THRESHOLD = 0.80
-        relative_min = top_score * SCORE_RELATIVE_THRESHOLD
-
-        # Step 4: Deduplicate + collect
         seen_contents = set()
-        chunks_data = []
+        candidate_chunks = []
 
-        for point, adj_score in adjusted_points:
+        for point in all_points:
             payload = point.payload or {}
             content = payload.get("content", "")
             meta = payload.get("metadata", {})
             if not content or len(content.strip()) < 30:
                 continue
-
-            # Skip if below relative threshold
-            if adj_score < relative_min:
-                break
-
-            # Content dedup (first 200 chars)
+            # Content dedup
             content_key = content[:200].strip().lower()
             content_hash = hash(content_key)
             if content_hash in seen_contents:
                 continue
-
             seen_contents.add(content_hash)
-
-            chunks_data.append({
+            candidate_chunks.append({
                 "chunk_id": payload.get("chunk_id", str(point.id)),
                 "content": content,
-                "score": round(point.score, 4),  # Keep original score for display
-                "adjusted_score": round(adj_score, 4),
+                "dense_score": round(point.score, 4),
                 "metadata": meta,
                 "table_references": payload.get("table_references", []),
                 "figure_references": payload.get("figure_references", []),
             })
-            if len(chunks_data) >= MAX_SOURCES:
+            if len(candidate_chunks) >= 20:
                 break
+
+        # Apply Cohere Rerank if available
+        cohere_key = os.environ.get("COHERE_API_KEY", "").strip()
+        if cohere_key and candidate_chunks:
+            try:
+                import cohere
+                rerank_client = cohere.Client(api_key=cohere_key)
+                # Truncate content for reranking (Cohere limit)
+                docs_for_rerank = [c["content"][:2000] for c in candidate_chunks]
+                # Use multilingual model for Arabic + English support
+                # For Arabic queries, use expanded query (with English medical terms) for better reranking
+                rerank_query = expanded_query_text if lang == 'arabic' else message.strip()
+                logger.info(f"Rerank query: lang={lang}, query='{rerank_query[:80]}'")
+                rerank_model = "rerank-multilingual-v3.0"
+                rerank_response = rerank_client.rerank(
+                    model=rerank_model,
+                    query=rerank_query,
+                    documents=docs_for_rerank,
+                    top_n=min(MAX_SOURCES, len(candidate_chunks)),
+                )
+                # Build reranked results
+                chunks_data = []
+                for result in rerank_response.results:
+                    chunk = candidate_chunks[result.index]
+                    chunk["score"] = round(result.relevance_score, 4)
+                    chunk["reranked"] = True
+                    chunks_data.append(chunk)
+                logger.info(f"Reranked {len(chunks_data)} chunks with Cohere {rerank_model}")
+            except Exception as e:
+                logger.warning(f"Rerank failed: {e}, falling back to dense scores")
+                # Fallback: use dense scores
+                chunks_data = candidate_chunks[:MAX_SOURCES]
+                for c in chunks_data:
+                    c["score"] = c["dense_score"]
+        else:
+            # No Cohere key: use dense scores
+            chunks_data = candidate_chunks[:MAX_SOURCES]
+            for c in chunks_data:
+                c["score"] = c["dense_score"]
 
         # Build structured sources
         sources = []

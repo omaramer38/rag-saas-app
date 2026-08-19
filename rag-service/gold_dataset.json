@@ -1,0 +1,80 @@
+{
+  "description": "Gold evaluation dataset for WHO diabetes guideline RAG system. Relevance labels: 2=Direct answer, 1=Supporting, 0=Irrelevant.",
+  "queries": [
+    {
+      "query": "What is diabetes?",
+      "relevant_chunks": {
+        "chk_e1bea238_0001": {"relevance": 2, "reason": "Front Matter contains diabetes mellitus definition and types"},
+        "chk_e1bea238_0005": {"relevance": 1, "reason": "Monitoring section mentions diabetes management"},
+        "chk_e1bea238_0006": {"relevance": 1, "reason": "Glossary contains diabetes-related definitions"}
+      }
+    },
+    {
+      "query": "What is type 2 diabetes?",
+      "relevant_chunks": {
+        "chk_e1bea238_0001": {"relevance": 2, "reason": "Front Matter describes Type 2 diabetes: insulin resistance and progressive beta-cell dysfunction"},
+        "chk_e1bea238_0003": {"relevance": 1, "reason": "Second-line agents mention type 2 diabetes treatment"},
+        "chk_e1bea238_0006": {"relevance": 1, "reason": "Glossary has SGLT-2 inhibitors used for type 2 diabetes"}
+      }
+    },
+    {
+      "query": "What is metformin?",
+      "relevant_chunks": {
+        "chk_e1bea238_0002": {"relevance": 2, "reason": "Section 3.1 has detailed metformin description: biguanide, mechanism, dosage, side effects"},
+        "chk_e1bea238_0003": {"relevance": 1, "reason": "Section 3.2 mentions metformin as first-line"},
+        "chk_e1bea238_0006": {"relevance": 2, "reason": "Glossary has metformin definition: biguanide, reduces hepatic glucose production"}
+      }
+    },
+    {
+      "query": "What are the types of diabetes?",
+      "relevant_chunks": {
+        "chk_e1bea238_0001": {"relevance": 2, "reason": "Front Matter lists Type 1, Type 2, and Gestational diabetes"},
+        "chk_e1bea238_0006": {"relevance": 1, "reason": "Glossary mentions diabetes types in definitions"}
+      }
+    },
+    {
+      "query": "ايه هو مرض السكري؟",
+      "relevant_chunks": {
+        "chk_e1bea238_0001": {"relevance": 2, "reason": "Front Matter contains diabetes definition (Arabic translation of query)"},
+        "chk_e1bea238_0005": {"relevance": 1, "reason": "Monitoring section mentions diabetes"},
+        "chk_e1bea238_0006": {"relevance": 1, "reason": "Glossary has diabetes definitions"}
+      }
+    },
+    {
+      "query": "ايه انواع مرض السكري؟",
+      "relevant_chunks": {
+        "chk_e1bea238_0001": {"relevance": 2, "reason": "Front Matter lists diabetes types"},
+        "chk_e1bea238_0003": {"relevance": 1, "reason": "Section 3.2 mentions type 1 and type 2 treatment differences"},
+        "chk_e1bea238_0006": {"relevance": 1, "reason": "Glossary mentions diabetes types"}
+      }
+    },
+    {
+      "query": "What insulin should be used for type 2 diabetes?",
+      "relevant_chunks": {
+        "chk_e1bea238_0004": {"relevance": 2, "reason": "Section 4.2 details insulin types: rapid-acting, short-acting, long-acting, dosing"},
+        "chk_e1bea238_0003": {"relevance": 1, "reason": "Section 3.2 mentions when to add insulin"}
+      }
+    },
+    {
+      "query": "What are the side effects of metformin?",
+      "relevant_chunks": {
+        "chk_e1bea238_0002": {"relevance": 2, "reason": "Section 3.1 mentions gastrointestinal side effects and contraindications"},
+        "chk_e1bea238_0006": {"relevance": 1, "reason": "Glossary mentions metformin"}
+      }
+    },
+    {
+      "query": "How to monitor blood glucose?",
+      "relevant_chunks": {
+        "chk_e1bea238_0005": {"relevance": 2, "reason": "Section 5 covers blood glucose monitoring, SMBG, HbA1c targets"},
+        "chk_e1bea238_0001": {"relevance": 1, "reason": "Front Matter mentions monitoring"}
+      }
+    },
+    {
+      "query": "ما هي انواع الانسولين؟",
+      "relevant_chunks": {
+        "chk_e1bea238_0004": {"relevance": 2, "reason": "Section 4.2 lists insulin types: rapid-acting, short-acting, intermediate, long-acting"},
+        "chk_e1bea238_0002": {"relevance": 1, "reason": "Section 3.1 mentions insulin therapy context"}
+      }
+    }
+  ]
+}
