@@ -63,8 +63,15 @@ except Exception:
 DEFAULT_CONFIG.embedding_dimension = EMBEDDING_DIMENSION
 DEFAULT_CONFIG.top_k_initial = 20
 DEFAULT_CONFIG.top_k_final = 5
-DEFAULT_CONFIG.similarity_threshold = 0.15  # Lower threshold for better recall
+DEFAULT_CONFIG.similarity_threshold = 0.40  # Higher threshold for better precision
 DEFAULT_CONFIG.distance_metric = "cosine"
+
+# Minimum score threshold — lower to not miss good results with FastEmbed
+MIN_SCORE_THRESHOLD = 0.40
+# Maximum number of sources to return
+MAX_SOURCES = 5
+# Max results per section (diversity)
+MAX_PER_SECTION = 2
 
 COLLECTION_PREFIX = "user_"
 
@@ -159,16 +166,94 @@ def run_full_ingestion_for_user(pdf_path: str, user_id: int, progress_callback=N
     # ─── Step 4: Chunk Document ─────────────────────────────────────────
     emit_progress("chunking", 50, "Constructing semantic chunks...")
     chunk_builder = SemanticChunkBuilder(
-        min_chunk_tokens=100,
-        target_chunk_tokens=350,
-        max_chunk_tokens=600
+        min_chunk_tokens=150,
+        target_chunk_tokens=450,
+        max_chunk_tokens=800
     )
     chunks = chunk_builder.build_chunks(doc_tree)
+
+    # ─── Step 4b: Clean & Filter Chunks ────────────────────────────────
+    # Critical for precision — remove noise that hurts retrieval quality
+    emit_progress("chunking", 55, "Cleaning and filtering chunks...")
+    import re as _re
+    cleaned_chunks = []
+    for chunk in chunks:
+        content = chunk.content.strip()
+        tokens = chunk.token_count
+        lines = content.split('\n')
+        first_line = lines[0].strip() if lines else ''
+
+        # === SIZE FILTERS ===
+        # Skip very small chunks (< 60 tokens) — likely headers or fragments
+        if tokens < 60:
+            continue
+
+        # === TABLE OF CONTENTS / NAVIGATION ===
+        # TOC entries: short, ends with page numbers or dots
+        if (_re.search(r'\.\.\.+\s*\d+$', content) or
+            _re.match(r'^[A-Z][a-z]+(\s+[A-Z][a-z]+)*\s*\.\.\.\s*\d+', content)):
+            continue
+
+        # Appendix references that are just titles
+        if _re.match(r'^##?\s*(Appendix|Annex|Table of Contents|Contents|Index)', first_line, _re.I):
+            if tokens < 200:
+                continue
+
+        # === IMAGE-ONLY CHUNKS ===
+        # Chunks that are just markdown images
+        text_without_images = _re.sub(r'!\[.*?\]\(.*?\)', '', content).strip()
+        if len(text_without_images) < 30:
+            continue
+
+        # Chunks starting with heading then immediately image
+        if _re.match(r'^#{1,3}\s+.*\n!\[', content) and tokens < 100:
+            continue
+
+        # === TABLE-ONLY CHUNKS ===
+        # Pure table headers with no real content
+        pipe_count = content.count('|')
+        if pipe_count > 3:
+            # Count non-table lines
+            non_table_lines = [l for l in lines if not l.strip().startswith('|') and '---' not in l]
+            non_table_text = ' '.join(non_table_lines).strip()
+            if len(non_table_text) < 40:
+                # This is just a table with no surrounding context — skip
+                continue
+
+        # === HEADING-ONLY CHUNKS ===
+        # Chunks that are just a heading with no body content
+        if first_line.startswith('#') and tokens < 80:
+            continue
+
+        # === DUPLICATE / REDUNDANT CONTENT ===
+        # Skip chunks that are just 'Continued from ...' markers
+        if _re.match(r'^\(Continued from.*\)$', content):
+            continue
+
+        # === CLEAN MARKDOWN ARTIFACTS ===
+        content = _re.sub(r'!\[.*?\]\(.*?\)', '', content)  # Remove images
+        content = _re.sub(r'\*\*Caption\*\*:\s*\*.*?\*', '', content)  # Remove captions
+        content = _re.sub(r'^#+\s*$', '', content, flags=_re.MULTILINE)  # Empty headings
+        content = _re.sub(r'\n{3,}', '\n\n', content)  # Collapse blank lines
+        content = content.strip()
+
+        # Skip if content is too short after cleaning
+        if len(content) < 60:
+            continue
+
+        # Update chunk content and token count
+        chunk.content = content
+        chunk.token_count = tokens  # Keep original accurate count from tiktoken
+        cleaned_chunks.append(chunk)
+
+    chunks = cleaned_chunks
+    logger.info(f"Step 4b done: {len(chunks)} chunks after filtering (removed {len(cleaned_chunks)} from original pool).")
+
     # Export chunks to user-specific directory
     chunks_json_path = os.path.join(chunks_dir, "chunks.json")
     chunks_jsonl_path = os.path.join(chunks_dir, "chunks.jsonl")
     export_chunks(chunks, json_path=chunks_json_path, jsonl_path=chunks_jsonl_path)
-    emit_progress("chunked", 60, f"Generated {len(chunks)} semantic chunks.")
+    emit_progress("chunked", 60, f"Generated {len(chunks)} clean semantic chunks.")
     logger.info(f"Step 4 done: {len(chunks)} chunks generated.")
 
     # ─── Step 5: Generate Embeddings ────────────────────────────────────
@@ -335,6 +420,7 @@ def upload_document():
         return jsonify({"error": "Only PDF files are supported"}), 400
 
     def generate_progress():
+        progress_lines = []  # Collect progress lines from callback
         try:
             yield json.dumps({"step": "saving", "progress": 5, "message": "Saving uploaded file..."}) + "\n"
 
@@ -345,14 +431,17 @@ def upload_document():
 
             yield json.dumps({"step": "saved", "progress": 10, "message": f"File saved ({file_size / 1024:.1f} KB)"}) + "\n"
 
-            # Run the full friend's ingestion pipeline
+            # Progress callback — collects lines (no yield in nested func!)
             def on_progress(step, progress, message):
-                # Map friend's pipeline progress to our upload progress (10-100%)
                 mapped_progress = 10 + int(progress * 0.9)
-                yield json.dumps({"step": step, "progress": mapped_progress, "message": message}) + "\n"
+                progress_lines.append(json.dumps({"step": step, "progress": mapped_progress, "message": message}) + "\n")
 
-            # Run ingestion and collect results
-            result = run_full_ingestion_for_user(file_path, user_id)
+            # Run ingestion with progress callback
+            result = run_full_ingestion_for_user(file_path, user_id, progress_callback=on_progress)
+
+            # Yield collected progress lines
+            for line in progress_lines:
+                yield line
 
             # Yield the final result
             yield json.dumps(result) + "\n"
@@ -407,13 +496,29 @@ def chat():
         processor = QueryProcessor()
         query_obj = processor.process(message)
 
+        # Query expansion — append original message for better matching
+        # This helps when the query processor strips important keywords
+        base_text = getattr(query_obj, 'processed_query', '') or getattr(query_obj, 'raw_query', '') or getattr(query_obj, 'text', '')
+        expanded_query_text = base_text + " " + message.strip()
+
         # Use friend's embedder for query embedding
         from rag_system.retriever.query_embedder import QueryEmbedder
         embedder = QueryEmbedder(cfg=DEFAULT_CONFIG)
-        q_vector = embedder.embed_query(query_obj)
 
-        # Search in user's collection — retrieve MORE candidates, then rerank
-        initial_k = top_k * 4  # Get 4x candidates for better reranking
+        # Create expanded query object for embedding
+        import copy
+        expanded_query_obj = copy.deepcopy(query_obj)
+        if hasattr(expanded_query_obj, 'text'):
+            expanded_query_obj.text = expanded_query_text
+        elif hasattr(expanded_query_obj, 'processed_query'):
+            expanded_query_obj.processed_query = expanded_query_text
+        elif hasattr(expanded_query_obj, 'raw_query'):
+            expanded_query_obj.raw_query = expanded_query_text
+
+        q_vector = embedder.embed_query(expanded_query_obj)
+
+        # Search in user's collection — retrieve many candidates, then filter & rerank
+        initial_k = 30  # Get many candidates
         search_result = qdrant_client.query_points(
             collection_name=collection,
             query=q_vector,
@@ -422,26 +527,49 @@ def chat():
 
         all_points = search_result.points if search_result.points else []
 
-        # Rerank: sort by score descending, then deduplicate by content similarity
-        seen_content_prefixes = set()
+        # Step 1: Filter by minimum score threshold
+        filtered_points = [p for p in all_points if p.score >= MIN_SCORE_THRESHOLD]
+
+        # Step 2: Sort by score descending
+        sorted_points = sorted(filtered_points, key=lambda p: p.score, reverse=True)
+
+        # Step 3: Deduplicate + MMR-style diversity
+        # Keep best chunk per content, then diversify across sections
+        seen_contents = set()
+        seen_sections = set()
         chunks_data = []
-        for point in sorted(all_points, key=lambda p: p.score, reverse=True):
+        section_count = {}  # section -> count
+        MAX_PER_SECTION = 2  # Don't over-represent one section
+
+        for point in sorted_points:
             payload = point.payload or {}
             content = payload.get("content", "")
-            # Deduplicate: skip if first 100 chars already seen
-            content_prefix = content[:100].strip().lower()
-            if content_prefix in seen_content_prefixes or not content_prefix:
+            meta = payload.get("metadata", {})
+            if not content or len(content.strip()) < 30:
                 continue
-            seen_content_prefixes.add(content_prefix)
+
+            # Content dedup (first 200 chars)
+            content_key = content[:200].strip().lower()
+            content_hash = hash(content_key)
+            if content_hash in seen_contents:
+                continue
+            seen_contents.add(content_hash)
+
+            # Section diversity — don't let one section dominate results
+            section_key = (meta.get('chapter', ''), meta.get('section', ''))
+            section_count[section_key] = section_count.get(section_key, 0) + 1
+            if section_count[section_key] > MAX_PER_SECTION:
+                continue
+
             chunks_data.append({
                 "chunk_id": payload.get("chunk_id", str(point.id)),
                 "content": content,
                 "score": round(point.score, 4),
-                "metadata": payload.get("metadata", {}),
+                "metadata": meta,
                 "table_references": payload.get("table_references", []),
                 "figure_references": payload.get("figure_references", []),
             })
-            if len(chunks_data) >= top_k:
+            if len(chunks_data) >= MAX_SOURCES:
                 break
 
         # Build structured sources
