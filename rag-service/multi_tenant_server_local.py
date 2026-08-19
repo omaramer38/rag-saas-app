@@ -66,12 +66,11 @@ DEFAULT_CONFIG.top_k_final = 5
 DEFAULT_CONFIG.similarity_threshold = 0.40  # Higher threshold for better precision
 DEFAULT_CONFIG.distance_metric = "cosine"
 
-# Minimum score threshold — lower to not miss good results with FastEmbed
-MIN_SCORE_THRESHOLD = 0.40
 # Maximum number of sources to return
 MAX_SOURCES = 5
-# Max results per section (diversity)
-MAX_PER_SECTION = 2
+# Relative score threshold — keep results within 80% of best score
+# Lower = more results but more noise. Higher = fewer but more precise.
+SCORE_RELATIVE_THRESHOLD = 0.80
 
 COLLECTION_PREFIX = "user_"
 
@@ -527,19 +526,17 @@ def chat():
 
         all_points = search_result.points if search_result.points else []
 
-        # Step 1: Filter by minimum score threshold
-        filtered_points = [p for p in all_points if p.score >= MIN_SCORE_THRESHOLD]
+        # Step 1: Sort all results by score descending
+        sorted_points = sorted(all_points, key=lambda p: p.score, reverse=True)
 
-        # Step 2: Sort by score descending
-        sorted_points = sorted(filtered_points, key=lambda p: p.score, reverse=True)
+        # Step 2: Relative score cutoff — keep only results within % of top score
+        top_score = sorted_points[0].score if sorted_points else 0
+        SCORE_RELATIVE_THRESHOLD = 0.80  # Keep results within 80% of best score
+        relative_min = top_score * SCORE_RELATIVE_THRESHOLD
 
-        # Step 3: Deduplicate + MMR-style diversity
-        # Keep best chunk per content, then diversify across sections
+        # Step 3: Deduplicate + collect
         seen_contents = set()
-        seen_sections = set()
         chunks_data = []
-        section_count = {}  # section -> count
-        MAX_PER_SECTION = 2  # Don't over-represent one section
 
         for point in sorted_points:
             payload = point.payload or {}
@@ -548,18 +545,16 @@ def chat():
             if not content or len(content.strip()) < 30:
                 continue
 
+            # Skip if below relative threshold
+            if point.score < relative_min:
+                break
+
             # Content dedup (first 200 chars)
             content_key = content[:200].strip().lower()
             content_hash = hash(content_key)
             if content_hash in seen_contents:
                 continue
             seen_contents.add(content_hash)
-
-            # Section diversity — don't let one section dominate results
-            section_key = (meta.get('chapter', ''), meta.get('section', ''))
-            section_count[section_key] = section_count.get(section_key, 0) + 1
-            if section_count[section_key] > MAX_PER_SECTION:
-                continue
 
             chunks_data.append({
                 "chunk_id": payload.get("chunk_id", str(point.id)),
@@ -793,12 +788,22 @@ def user_metrics(user_id: int):
             latency_ms = (time.time() - t0) * 1000
             latencies.append(latency_ms)
 
+            # Ground truth: same chapter as the query chunk
+            # This is more realistic than exact chunk matching
+            query_chapter = point.payload.get("metadata", {}).get("chapter", "")
+            truth_ids = []
+            for p in (search_result.points or []):
+                pl = p.payload or {}
+                retrieved_chapter = pl.get("metadata", {}).get("chapter", "")
+                if retrieved_chapter == query_chapter and retrieved_chapter:
+                    truth_ids.append(pl.get("chunk_id", str(p.id)))
+            if not truth_ids:
+                truth_ids = [chunk_id]  # Fallback to exact match
+
             retrieved_ids = []
             for p in (search_result.points or []):
                 pl = p.payload or {}
                 retrieved_ids.append(pl.get("chunk_id", str(p.id)))
-
-            truth_ids = [chunk_id]
 
             recalls_1.append(calculate_recall_at_k(retrieved_ids, truth_ids, 1))
             recalls_3.append(calculate_recall_at_k(retrieved_ids, truth_ids, 3))
