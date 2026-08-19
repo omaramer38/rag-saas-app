@@ -1,59 +1,177 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# 🩺 DoctorChat - RAG SaaS Application
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+A medical AI SaaS platform with Retrieval-Augmented Generation (RAG) for doctors to upload PDF research papers and chat with an AI assistant trained on their documents.
 
-## About Laravel
+## 🏗️ Architecture
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+```
+┌─────────────────────┐     ┌─────────────────────┐
+│   Laravel 12 App    │────▶│   Python RAG Server  │
+│   (Port 8000)       │     │   (Port 5000)        │
+│                     │     │                      │
+│ • Auth (Breeze)     │     │ • Flask API          │
+│ • Admin Dashboard   │     │ • FastEmbed          │
+│ • Doctor Dashboard  │     │ • Qdrant (embedded)  │
+│ • File Upload       │     │ • PDF Parsing        │
+│ • Chat Interface    │     │ • Vector Search      │
+│ • Paymob Payment    │     │ • Multi-tenant       │
+└─────────────────────┘     └─────────────────────┘
+```
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## 🚀 Quick Start
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+### Prerequisites
+- PHP 8.2+
+- Python 3.12+
+- MySQL
+- Composer
+- pip (Python package manager)
 
-## Learning Laravel
+### 1. Clone & Install PHP Dependencies
+```bash
+git clone https://github.com/omaramer38/rag-saas-app.git
+cd rag-saas-app
+composer install
+```
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+### 2. Environment Setup
+```bash
+cp .env.example .env
+php artisan key:generate
+```
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+Edit `.env` with your database credentials:
+```env
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=doctorchat
+DB_USERNAME=root
+DB_PASSWORD=
+```
 
-## Laravel Sponsors
+### 3. Database Setup
+```bash
+php artisan migrate
+php artisan db:seed
+```
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+### 4. Install Python Dependencies
+```bash
+cd rag-service
+pip install -r requirements.txt
+```
 
-### Premium Partners
+### 5. Start Services
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+**Terminal 1 - Laravel:**
+```bash
+cd ..  # back to project root
+php artisan serve --host=127.0.0.1 --port=8000
+```
 
-## Contributing
+**Terminal 2 - RAG Server:**
+```bash
+cd rag-service
+python multi_tenant_server_local.py
+```
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+### 6. Access the App
+- **Landing Page:** http://127.0.0.1:8000
+- **Admin Dashboard:** http://127.0.0.1:8000/admin/dashboard
+- **Doctor Dashboard:** http://127.0.0.1:8000/doctor/dashboard
 
-## Code of Conduct
+### Default Credentials
+| Role | Email | Password |
+|------|-------|----------|
+| Admin | admin@doctorchat.com | password |
+| Doctor | doctor@doctorchat.com | password |
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+## 📁 Project Structure
 
-## Security Vulnerabilities
+```
+doctorchat/
+├── app/
+│   ├── Http/Controllers/
+│   │   ├── Admin/          # Admin controllers
+│   │   ├── Auth/           # Authentication
+│   │   ├── Doctor/         # Doctor controllers
+│   │   └── Payment/        # Paymob integration
+│   ├── Models/             # Eloquent models
+│   ├── Enums/              # Status enums
+│   ├── Middleware/          # Custom middleware
+│   └── Services/
+│       └── RagService.php  # RAG API client
+├── resources/views/        # Blade templates
+│   ├── admin/              # Admin dashboard views
+│   ├── doctor/             # Doctor dashboard views
+│   └── layouts/            # Layout templates
+├── rag-service/            # Python RAG server
+│   ├── multi_tenant_server_local.py  # Main server
+│   ├── src/rag_system/     # RAG pipeline code
+│   └── requirements.txt    # Python dependencies
+├── routes/                 # Laravel routes
+├── database/               # Migrations & seeders
+└── docker-compose.yml      # Docker setup
+```
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+## 🔧 Key Features
 
-## License
+### For Doctors
+- 📤 **Upload PDF** - Drag & drop research papers
+- 📊 **Processing Metrics** - Real-time progress + quality report
+- 🎯 **Retrieval Metrics** - Recall, Precision, F1, nDCG scores
+- 💬 **AI Chat** - Ask questions about uploaded documents
+- 📎 **Source Citations** - Every answer shows source with page numbers
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+### For Admin
+- 👥 **User Management** - Add/edit/delete doctors
+- 💳 **Subscription Plans** - Create and manage pricing
+- 📋 **Assign Subscriptions** - Manually assign plans to doctors
+- 📖 **Guide Management** - Create documentation pages
+- 🤖 **Admin Chat** - Admin also has AI chatbot
+- 📊 **Dashboard Stats** - Users, subscriptions, revenue
+
+### Technical
+- 🔐 **Multi-tenant Isolation** - Each doctor's data is separate
+- 🚀 **Background Processing** - File processing doesn't block UI
+- 💾 **Server-side Caching** - Redis/File cache for performance
+- 🌐 **Browser Caching** - HTTP headers + Service Worker
+- 📱 **Responsive Design** - Works on all devices
+
+## 🐳 Docker Setup
+
+```bash
+docker-compose up -d
+```
+
+This starts:
+- Laravel app on port 8000
+- RAG server on port 5000
+- Qdrant on port 6333
+
+## 📊 RAG Pipeline
+
+1. **Parse PDF** - OCR, tables, figures extraction
+2. **Clean Text** - Normalize whitespace, fix hyphenation
+3. **Build Hierarchy** - Chapter → Section → Subsection
+4. **Semantic Chunking** - 100-600 token chunks
+5. **Embedding** - FastEmbed (bge-small-en-v1.5, 384d)
+6. **Vector Indexing** - Qdrant collections per user
+7. **Search + Rerank** - Cosine similarity with dedup
+
+## 🛠️ Tech Stack
+
+| Layer | Technology |
+|-------|------------|
+| Backend | Laravel 12, PHP 8.2 |
+| Frontend | Blade, Tailwind CSS, Alpine.js |
+| RAG Server | Python, Flask, FastEmbed |
+| Vector DB | Qdrant (embedded mode) |
+| Database | MySQL |
+| Payment | Paymob |
+| Auth | Laravel Breeze |
+
+## 📄 License
+
+MIT License
