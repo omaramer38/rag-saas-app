@@ -530,10 +530,58 @@ def chat():
         processor = QueryProcessor()
         query_obj = processor.process(message)
 
-        # Query expansion — append original message for better matching
-        # This helps when the query processor strips important keywords
-        base_text = getattr(query_obj, 'processed_query', '') or getattr(query_obj, 'raw_query', '') or getattr(query_obj, 'text', '')
-        expanded_query_text = base_text + " " + message.strip()
+        # Detect language and expand query for better matching
+        lang = detect_language(message)
+        
+        # Arabic-to-English medical term mapping for better cross-lingual retrieval
+        _AR_EN_MEDICAL = {
+            'مرض السكري': 'diabetes mellitus',
+            'السكري': 'diabetes',
+            'نوع السكري': 'types of diabetes',
+            'انواع مرض السكري': 'types of diabetes mellitus',
+            'ضغط الدم': 'blood pressure',
+            'ال-cardiovascular': 'cardiovascular diseases',
+            'القلب': 'heart',
+            'ال Brain': 'brain',
+            'ال_insulin': 'insulin',
+            'ال-.albuminuria': 'albuminuria',
+            'الفشل الكلوي': 'chronic kidney disease renal failure',
+            'التشخيص': 'diagnosis',
+            'العلاج': 'treatment management',
+            'الادوية': 'medications drugs',
+            'الاعراض': 'symptoms signs',
+            'النوع الاول': 'type 1',
+            'النوع الثاني': 'type 2',
+            'النوع 1': 'type 1',
+            'النوع 2': 'type 2',
+            'السكري من النوع الاول': 'type 1 diabetes mellitus',
+            'السكري من النوع الثاني': 'type 2 diabetes mellitus',
+            'الادويه': 'medications drugs',
+            'الوقايه': 'prevention',
+            'التغذية': 'nutrition diet',
+            'التمارين': 'exercise physical activity',
+            'الوزن': 'weight obesity BMI',
+            'الفحص': 'screening',
+            'ال enfants': 'children pediatric',
+            'الحوامل': 'pregnancy gestational',
+            'لكبار السن': 'elderly geriatric',
+            'ال_error': 'errors',
+            'ال_complications': 'complications',
+            'اعتلال الاعصاب': 'neuropathy',
+            'اعتلال الشبكه': 'retinopathy',
+            'ال Fuß Fuß': 'foot ulcer',
+        }
+        
+        # Expand query with English translations for Arabic queries
+        expanded_parts = [message.strip()]
+        if lang == 'arabic':
+            # Add all matching medical terms as English equivalents
+            for ar_term, en_term in _AR_EN_MEDICAL.items():
+                if ar_term in message:
+                    expanded_parts.append(en_term)
+            # Also add the raw query as-is for the embedding model
+        
+        expanded_query_text = ' '.join(expanded_parts)
 
         # Use friend's embedder for query embedding
         from rag_system.retriever.query_embedder import QueryEmbedder
@@ -552,7 +600,7 @@ def chat():
         q_vector = embedder.embed_query(expanded_query_obj)
 
         # Search in user's collection — retrieve many candidates, then filter & rerank
-        initial_k = 30  # Get many candidates
+        initial_k = 50  # Get many candidates for better recall
         search_result = qdrant_client.query_points(
             collection_name=collection,
             query=q_vector,
@@ -897,7 +945,7 @@ def user_metrics(user_id: int):
                 "max_ms": round(max(latencies), 2) if latencies else 0,
             },
             "embedding_config": {
-                "model": "FastEmbed (bge-small-en-v1.5)",
+                "model": EMBEDDING_MODEL_NAME,
                 "dimension": EMBEDDING_DIMENSION,
                 "batch_size": 32,
             },
