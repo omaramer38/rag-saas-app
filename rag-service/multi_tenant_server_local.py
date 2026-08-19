@@ -171,6 +171,8 @@ def run_full_ingestion_for_user(pdf_path: str, user_id: int, progress_callback=N
     user_data_dir = get_user_data_dir(user_id)
     chunks_dir = os.path.join(user_data_dir, "chunks")
     embeddings_dir = os.path.join(user_data_dir, "embeddings")
+    os.makedirs(chunks_dir, exist_ok=True)
+    os.makedirs(embeddings_dir, exist_ok=True)
 
     def emit_progress(step, progress, message):
         if progress_callback:
@@ -377,7 +379,10 @@ def run_full_ingestion_for_user(pdf_path: str, user_id: int, progress_callback=N
         if os.path.exists(chunks_jsonl_path):
             shutil.copy2(chunks_jsonl_path, chunks_jsonl_default)
 
-        embedding_pipeline = EmbeddingPipeline()
+        # Create embedder with overridden model (embed-v4.0) to avoid config import issue
+        from rag_system.embeddings.cohere import CohereEmbedder as _CE
+        _embedder = _CE(api_key=cohere_key, model="embed-v4.0")
+        embedding_pipeline = EmbeddingPipeline(embedder=_embedder)
         embedded_records = embedding_pipeline.run()
 
         # Now copy the generated embeddings back to user-specific directory
@@ -484,35 +489,63 @@ def _generate_answer_with_llm(query: str, context: str, sources: list, lang: str
     Generate a coherent answer from retrieved sources.
     Uses fast source formatting (no external LLM) for speed.
     The frontend renders the sources as cards.
+    IMPORTANT: Only answer from the document. Never use outside knowledge.
     """
-    return _format_sources_answer(sources)
+    return _format_sources_answer(sources, query)
 
 
-def _format_sources_answer(sources: list) -> str:
-    """Format sources as a clean structured answer."""
+def _format_sources_answer(sources: list, query: str = '') -> str:
+    """Format sources as a clean structured answer.
+    
+    IMPORTANT: The bot can ONLY answer from the uploaded document.
+    If the document doesn't contain the answer, say so clearly.
+    Never use outside knowledge.
+    """
+    import re
+    
     if not sources:
-        return "No relevant information found in the uploaded document."
-
-    # Build the answer from the most relevant source content
-    # Source 1 content becomes the main answer, others are references
+        return (
+            "**I cannot answer this question.**\n\n"
+            "The uploaded document does not contain information to answer this question. "
+            "I can only provide answers based on the content of your uploaded PDF file."
+        )
+    
     main_source = sources[0]
+    main_score = main_source.get('score', 0)
+    
+    # If the best match score is too low, the document likely doesn't have the answer
+    if main_score < 0.30:
+        refs = []
+        for src in sources:
+            s_ch = src.get('chapter', '') or ''
+            s_sec = src.get('section', '') or ''
+            s_page = src.get('page_start', '?')
+            s_loc = ' > '.join(filter(None, [s_ch, s_sec, f'p.{s_page}']))
+            s_score = round(src.get('score', 0) * 100, 1)
+            refs.append(f"[Source {src['index']}] {s_loc} ({s_score}%)")
+        
+        return (
+            f"**I could not find a clear answer in the uploaded document.**\n\n"
+            f"The document does not appear to contain specific information about this topic. "
+            f"I can only answer questions based on the content of your uploaded PDF file.\n\n"
+            f"The closest sections found were:\n" + "\n".join(refs)
+        )
+    
     ch = main_source.get('chapter', '') or ''
     sec = main_source.get('section', '') or ''
     page = main_source.get('page_start', '?')
     location = ' > '.join(filter(None, [ch, sec, f'p.{page}']))
-    score_pct = round(main_source.get('score', 0) * 100, 1)
+    score_pct = round(main_score * 100, 1)
 
     # Clean the content - remove markdown headers and tables for readability
     content = main_source.get('content', '').strip()
-    # Remove markdown table formatting
-    import re
-    content = re.sub(r'\|\s*-+\s*\|', '', content)  # Remove table separators
-    content = re.sub(r'\|\s*$', '', content, flags=re.MULTILINE)  # Remove trailing pipes
-    content = re.sub(r'^\|\s*', '', content, flags=re.MULTILINE)  # Remove leading pipes
-    content = re.sub(r'\|{2,}', '\n', content)  # Double pipes to newline
+    content = re.sub(r'\|\s*-+\s*\|', '', content)
+    content = re.sub(r'\|\s*$', '', content, flags=re.MULTILINE)
+    content = re.sub(r'^\|\s*', '', content, flags=re.MULTILINE)
+    content = re.sub(r'\|{2,}', '\n', content)
     content = content.strip()
 
-    answer = f"Based on the document ({location}):\n\n{content}"
+    answer = f"**Based on the uploaded document** ({location}, Relevance: {score_pct}%):\n\n{content}"
 
     # Add source references
     refs = []
@@ -524,7 +557,8 @@ def _format_sources_answer(sources: list) -> str:
         s_score = round(src.get('score', 0) * 100, 1)
         refs.append(f"[Source {src['index']}] {s_loc} ({s_score}%)")
 
-    answer += "\n\n---\n\nSources:\n" + "\n".join(refs)
+    answer += "\n\n---\n\n📎 Sources from document:\n" + "\n".join(refs)
+    answer += "\n\n> ℹ️ *I can only answer based on the uploaded document. If you need information not in the file, please upload a more relevant PDF.*"
     return answer
 
 
@@ -820,11 +854,25 @@ def chat():
         else:
             answer = "No relevant information found in the uploaded document. Please make sure you have uploaded a PDF file."
 
+        # Determine confidence based on best source score
+        best_score = chunks_data[0].get('score', 0) if chunks_data else 0
+        if best_score >= 0.50:
+            confidence = "high"
+            warning = None
+        elif best_score >= 0.30:
+            confidence = "medium"
+            warning = "The document may not directly address this question."
+        else:
+            confidence = "low"
+            warning = "The uploaded document does not appear to contain information about this topic."
+
         return jsonify({
             "answer": answer,
             "sources": sources,
             "chunks_used": len(chunks_data),
             "total_vectors": col_info.points_count,
+            "confidence": confidence,
+            "warning": warning,
             "lang": detect_language(message),
             "retrieval_info": {
                 "top_k": top_k,
