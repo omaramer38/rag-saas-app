@@ -37,8 +37,25 @@ from rag_system.ingestion.parser import advanced_parse_pdf
 from rag_system.ingestion.cleaner import clean_text
 from rag_system.ingestion.hierarchy_builder import HierarchyBuilder
 from rag_system.ingestion.chunker import SemanticChunkBuilder, export_chunks
-from rag_system.ingestion.embedder import EmbeddingPipeline
 from rag_system.retriever.prompt_builder import detect_language, QueryProcessor
+
+# Override the Cohere embed model to embed-v4.0 (1536 dim)
+# This ensures EmbeddingPipeline uses the same model as QueryEmbedder
+import rag_system.config.config as _rag_config
+_rag_config.COHERE_EMBED_MODEL = "embed-v4.0"
+
+# Monkey-patch CohereEmbedder.dimension to return actual v4.0 dimension (1536)
+# The friend's code hardcodes 1024, but embed-v4.0 outputs 1536
+from rag_system.embeddings.cohere import CohereEmbedder as _CohereEmbedder
+_original_cohere_dim = _CohereEmbedder.dimension
+@property
+def _cohere_v4_dimension(self):
+    if "v4" in self._model:
+        return 1536
+    return _original_cohere_dim.fget(self)
+_CohereEmbedder.dimension = _cohere_v4_dimension
+
+from rag_system.ingestion.embedder import EmbeddingPipeline
 
 # ─── Logging ──────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -49,21 +66,39 @@ app = Flask(__name__)
 CORS(app)
 
 # ─── Config ───────────────────────────────────────────────────────────────
-# Detect embedding dimension from the embedder
-try:
-    from rag_system.embeddings.local import FastEmbedEmbedder
-    _temp_embedder = FastEmbedEmbedder()
-    EMBEDDING_DIMENSION = _temp_embedder.dimension
-    logger.info(f"Using FastEmbed embeddings (dimension: {EMBEDDING_DIMENSION})")
-except Exception:
-    EMBEDDING_DIMENSION = 384
-    logger.warning(f"Could not detect embedding dimension, defaulting to {EMBEDDING_DIMENSION}")
+# Embedding model selection: Cohere embed-v4.0 (1536 dim) with FastEmbed fallback
+import os as _os
+cohere_key = _os.environ.get("COHERE_API_KEY", "").strip()
+if cohere_key:
+    try:
+        from rag_system.embeddings.cohere import CohereEmbedder
+        _temp_embedder = CohereEmbedder(api_key=cohere_key, model="embed-v4.0")
+        # embed-v4.0 outputs 1536 dimensions (CohereEmbedder.dimension is hardcoded)
+        EMBEDDING_DIMENSION = 1536
+        EMBEDDING_MODEL_NAME = "Cohere embed-v4.0"
+        logger.info(f"Using Cohere embed-v4.0 embeddings (dimension: {EMBEDDING_DIMENSION})")
+    except Exception as e:
+        cohere_key = ""  # Force fallback
+        logger.warning(f"Cohere init failed: {e}, falling back to FastEmbed")
 
-# Override DEFAULT_CONFIG to match FastEmbed instead of Cohere
+if not cohere_key:
+    try:
+        from rag_system.embeddings.local import FastEmbedEmbedder
+        _temp_embedder = FastEmbedEmbedder()
+        EMBEDDING_DIMENSION = _temp_embedder.dimension
+        EMBEDDING_MODEL_NAME = "FastEmbed bge-small-en-v1.5"
+        logger.info(f"Using FastEmbed embeddings (dimension: {EMBEDDING_DIMENSION})")
+    except Exception:
+        EMBEDDING_DIMENSION = 384
+        EMBEDDING_MODEL_NAME = "FastEmbed bge-small-en-v1.5 (fallback)"
+        logger.warning(f"Could not detect embedding dimension, defaulting to {EMBEDDING_DIMENSION}")
+
+# Override DEFAULT_CONFIG to match selected embedder
 DEFAULT_CONFIG.embedding_dimension = EMBEDDING_DIMENSION
+DEFAULT_CONFIG.embedding_model = "embed-v4.0" if cohere_key else "bge-small-en-v1.5"
 DEFAULT_CONFIG.top_k_initial = 20
 DEFAULT_CONFIG.top_k_final = 5
-DEFAULT_CONFIG.similarity_threshold = 0.40  # Higher threshold for better precision
+DEFAULT_CONFIG.similarity_threshold = 0.30
 DEFAULT_CONFIG.distance_metric = "cosine"
 
 # Maximum number of sources to return
