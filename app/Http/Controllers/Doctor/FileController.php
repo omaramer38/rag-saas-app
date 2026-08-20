@@ -28,9 +28,9 @@ class FileController extends Controller
 
         $user = auth()->user();
 
-        // Delete old file if exists
-        $existingFile = $user->files()->latest()->first();
-        if ($existingFile) {
+        // Delete existing files if exist
+        $existingFiles = $user->files()->get();
+        foreach ($existingFiles as $existingFile) {
             $this->deleteFile($existingFile);
         }
 
@@ -232,13 +232,28 @@ class FileController extends Controller
 
     private function deleteFile(DoctorFile $file): void
     {
+        cache()->forget("file_progress_{$file->id}");
+        cache()->forget("file_result_{$file->id}");
+
         try {
             $ragService = app(RagService::class);
             $ragService->deleteDocument($file->user_id);
         } catch (\Exception $e) {
             Log::error('Failed to delete RAG document', ['user_id' => $file->user_id, 'error' => $e->getMessage()]);
         }
-        Storage::disk('local')->delete($file->file_path);
-        $file->delete();
+
+        try {
+            if ($file->file_path && Storage::disk('local')->exists($file->file_path)) {
+                Storage::disk('local')->delete($file->file_path);
+            }
+        } catch (\Exception $e) {
+            Log::error('Failed to delete physical file', ['file_id' => $file->id, 'error' => $e->getMessage()]);
+        }
+
+        try {
+            $file->delete();
+        } catch (\Exception $e) {
+            Log::error('Failed to delete DoctorFile record', ['file_id' => $file->id, 'error' => $e->getMessage()]);
+        }
     }
 }

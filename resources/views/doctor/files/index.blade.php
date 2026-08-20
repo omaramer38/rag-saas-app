@@ -615,5 +615,15 @@ uploadForm.addEventListener('submit', async function(e) {
         uploadBtn.disabled = false; uploadBtn.textContent = 'Upload & Process';
     }
 });
+
+@php $processingFile = $files->firstWhere('status', 'processing'); @endphp
+@if($processingFile)
+document.addEventListener('DOMContentLoaded', function() {
+    progressSection.classList.remove('hidden');
+    progressTitle.textContent = 'Processing Your Document...';
+    progressMessage.textContent = 'Continuing document processing...';
+    startPolling({{ $processingFile->id }});
+});
+@endif
 </script>
 @endpush

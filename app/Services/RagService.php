@@ -46,7 +46,12 @@ class RagService
         }
 
         try {
+            $lastUpdate = [];
+
             $response = Http::timeout($this->timeout)
+                ->withOptions([
+                    'stream' => true,
+                ])
                 ->attach('file', file_get_contents($filePath), $file->file_name)
                 ->withHeaders([
                     'Accept' => 'application/x-ndjson',
@@ -59,20 +64,37 @@ class RagService
                 Log::error('RAG upload failed', [
                     'file_id' => $file->id,
                     'status' => $response->status(),
-                    'body' => $response->body(),
                 ]);
                 throw new \RuntimeException('Failed to upload document to RAG service');
             }
 
-            // Parse NDJSON response line by line
-            $lines = explode("\n", trim($response->body()));
-            $lastUpdate = [];
+            $body = $response->toPsrResponse()->getBody();
+            $buffer = '';
 
-            foreach ($lines as $line) {
-                if (empty(trim($line))) continue;
-                
-                $data = json_decode($line, true);
-                if ($data) {
+            while (!$body->eof()) {
+                $chunk = $body->read(1024);
+                $buffer .= $chunk;
+
+                while (($pos = strpos($buffer, "\n")) !== false) {
+                    $line = substr($buffer, 0, $pos);
+                    $buffer = substr($buffer, $pos + 1);
+                    $trimmedLine = trim($line);
+
+                    if (empty($trimmedLine)) continue;
+
+                    $data = json_decode($trimmedLine, true);
+                    if (is_array($data)) {
+                        $lastUpdate = $data;
+                        if ($onProgress) {
+                            $onProgress($data);
+                        }
+                    }
+                }
+            }
+
+            if (!empty(trim($buffer))) {
+                $data = json_decode(trim($buffer), true);
+                if (is_array($data)) {
                     $lastUpdate = $data;
                     if ($onProgress) {
                         $onProgress($data);

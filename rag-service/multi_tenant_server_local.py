@@ -16,6 +16,9 @@ import logging
 import tempfile
 import traceback
 import shutil
+import threading
+import queue
+from collections import defaultdict
 from datetime import datetime
 
 # Setup path to friend's RAG code
@@ -109,6 +112,16 @@ SCORE_RELATIVE_THRESHOLD = 0.80
 
 COLLECTION_PREFIX = "user_"
 
+_user_locks = defaultdict(threading.Lock)
+_user_locks_guard = threading.Lock()
+_embedding_file_lock = threading.Lock()
+
+
+def get_user_lock(user_id: int) -> threading.Lock:
+    with _user_locks_guard:
+        return _user_locks[user_id]
+
+
 # Use embedded Qdrant (no Docker needed)
 QDRANT_PATH = os.path.join(os.path.dirname(__file__), "data", "qdrant_db")
 os.makedirs(QDRANT_PATH, exist_ok=True)
@@ -167,6 +180,11 @@ def run_full_ingestion_for_user(pdf_path: str, user_id: int, progress_callback=N
     
     Steps: Parse → Clean → Hierarchy → Chunk → Embed → Index to Qdrant
     """
+    with get_user_lock(user_id):
+        return _run_full_ingestion_internal(pdf_path, user_id, progress_callback)
+
+
+def _run_full_ingestion_internal(pdf_path: str, user_id: int, progress_callback=None) -> dict:
     start_time = time.time()
     user_data_dir = get_user_data_dir(user_id)
     chunks_dir = os.path.join(user_data_dir, "chunks")
@@ -353,51 +371,58 @@ def run_full_ingestion_for_user(pdf_path: str, user_id: int, progress_callback=N
     # ─── Step 5: Generate Embeddings ────────────────────────────────────
     emit_progress("embedding", 65, f"Generating embeddings for {len(chunks)} chunks...")
 
-    # The friend's EmbeddingPipeline imports DEFAULT_CHUNKS_JSON at module level,
-    # so we need to write chunks to the default path it expects, then move the output.
-    from rag_system.config import config as rag_config
-    default_chunks_dir = os.path.dirname(rag_config.DEFAULT_CHUNKS_JSON)
-    default_embeddings_dir = os.path.dirname(rag_config.DEFAULT_EMBEDDINGS_JSON)
-    os.makedirs(default_chunks_dir, exist_ok=True)
-    os.makedirs(default_embeddings_dir, exist_ok=True)
+    with _embedding_file_lock:
+        # The friend's EmbeddingPipeline imports DEFAULT_CHUNKS_JSON at module level,
+        # so we need to write chunks to the default path it expects, then move the output.
+        from rag_system.config import config as rag_config
+        default_chunks_dir = os.path.dirname(rag_config.DEFAULT_CHUNKS_JSON)
+        default_embeddings_dir = os.path.dirname(rag_config.DEFAULT_EMBEDDINGS_JSON)
+        os.makedirs(default_chunks_dir, exist_ok=True)
+        os.makedirs(default_embeddings_dir, exist_ok=True)
 
-    # Backup existing files at the default path (if any)
-    backup_chunks = None
-    backup_embeddings = None
-    if os.path.exists(rag_config.DEFAULT_CHUNKS_JSON):
-        backup_chunks = rag_config.DEFAULT_CHUNKS_JSON + ".bak"
-        shutil.copy2(rag_config.DEFAULT_CHUNKS_JSON, backup_chunks)
-    if os.path.exists(rag_config.DEFAULT_EMBEDDINGS_JSON):
-        backup_embeddings = rag_config.DEFAULT_EMBEDDINGS_JSON + ".bak"
-        shutil.copy2(rag_config.DEFAULT_EMBEDDINGS_JSON, backup_embeddings)
-
-    try:
-        # Write user's chunks to the default location so EmbeddingPipeline can find them
-        shutil.copy2(chunks_json_path, rag_config.DEFAULT_CHUNKS_JSON)
-        # Also copy the JSONL
-        chunks_jsonl_default = rag_config.DEFAULT_CHUNKS_JSONL if hasattr(rag_config, 'DEFAULT_CHUNKS_JSONL') else os.path.join(default_chunks_dir, "chunks.jsonl")
-        if os.path.exists(chunks_jsonl_path):
-            shutil.copy2(chunks_jsonl_path, chunks_jsonl_default)
-
-        # Create embedder with overridden model (embed-v4.0) to avoid config import issue
-        from rag_system.embeddings.cohere import CohereEmbedder as _CE
-        _embedder = _CE(api_key=cohere_key, model="embed-v4.0")
-        embedding_pipeline = EmbeddingPipeline(embedder=_embedder)
-        embedded_records = embedding_pipeline.run()
-
-        # Now copy the generated embeddings back to user-specific directory
+        # Backup existing files at the default path (if any)
+        backup_chunks = None
+        backup_embeddings = None
+        if os.path.exists(rag_config.DEFAULT_CHUNKS_JSON):
+            backup_chunks = rag_config.DEFAULT_CHUNKS_JSON + ".bak"
+            shutil.copy2(rag_config.DEFAULT_CHUNKS_JSON, backup_chunks)
         if os.path.exists(rag_config.DEFAULT_EMBEDDINGS_JSON):
-            shutil.copy2(rag_config.DEFAULT_EMBEDDINGS_JSON, os.path.join(embeddings_dir, "embeddings.json"))
-    finally:
-        # Restore original files at the default path
-        if backup_chunks and os.path.exists(backup_chunks):
-            shutil.move(backup_chunks, rag_config.DEFAULT_CHUNKS_JSON)
-        elif os.path.exists(rag_config.DEFAULT_CHUNKS_JSON):
-            os.remove(rag_config.DEFAULT_CHUNKS_JSON)
-        if backup_embeddings and os.path.exists(backup_embeddings):
-            shutil.move(backup_embeddings, rag_config.DEFAULT_EMBEDDINGS_JSON)
-        elif os.path.exists(rag_config.DEFAULT_EMBEDDINGS_JSON):
-            os.remove(rag_config.DEFAULT_EMBEDDINGS_JSON)
+            backup_embeddings = rag_config.DEFAULT_EMBEDDINGS_JSON + ".bak"
+            shutil.copy2(rag_config.DEFAULT_EMBEDDINGS_JSON, backup_embeddings)
+
+        try:
+            # Write user's chunks to the default location so EmbeddingPipeline can find them
+            shutil.copy2(chunks_json_path, rag_config.DEFAULT_CHUNKS_JSON)
+            # Also copy the JSONL
+            chunks_jsonl_default = rag_config.DEFAULT_CHUNKS_JSONL if hasattr(rag_config, 'DEFAULT_CHUNKS_JSONL') else os.path.join(default_chunks_dir, "chunks.jsonl")
+            if os.path.exists(chunks_jsonl_path):
+                shutil.copy2(chunks_jsonl_path, chunks_jsonl_default)
+
+            # Create embedder with overridden model (embed-v4.0) to avoid config import issue
+            from rag_system.embeddings.cohere import CohereEmbedder as _CE
+            _embedder = _CE(api_key=cohere_key, model="embed-v4.0")
+            embedding_pipeline = EmbeddingPipeline(embedder=_embedder)
+            embedded_records = embedding_pipeline.run()
+
+            # Now copy the generated embeddings back to user-specific directory
+            if os.path.exists(rag_config.DEFAULT_EMBEDDINGS_JSON):
+                shutil.copy2(rag_config.DEFAULT_EMBEDDINGS_JSON, os.path.join(embeddings_dir, "embeddings.json"))
+        finally:
+            # Restore original files at the default path
+            if backup_chunks and os.path.exists(backup_chunks):
+                shutil.move(backup_chunks, rag_config.DEFAULT_CHUNKS_JSON)
+            elif os.path.exists(rag_config.DEFAULT_CHUNKS_JSON):
+                try:
+                    os.remove(rag_config.DEFAULT_CHUNKS_JSON)
+                except Exception:
+                    pass
+            if backup_embeddings and os.path.exists(backup_embeddings):
+                shutil.move(backup_embeddings, rag_config.DEFAULT_EMBEDDINGS_JSON)
+            elif os.path.exists(rag_config.DEFAULT_EMBEDDINGS_JSON):
+                try:
+                    os.remove(rag_config.DEFAULT_EMBEDDINGS_JSON)
+                except Exception:
+                    pass
 
     emit_progress("embedded", 80, f"Generated {len(embedded_records)} embeddings.")
     logger.info(f"Step 5 done: {len(embedded_records)} embeddings generated.")
@@ -597,38 +622,40 @@ def upload_document():
         return jsonify({"error": "Only PDF files are supported"}), 400
 
     def generate_progress():
-        progress_lines = []  # Collect progress lines from callback
-        try:
-            yield json.dumps({"step": "saving", "progress": 5, "message": "Saving uploaded file..."}) + "\n"
+        q = queue.Queue()
+        SENTINEL = object()
 
-            temp_dir = tempfile.mkdtemp()
-            file_path = os.path.join(temp_dir, file.filename)
-            file.save(file_path)
-            file_size = os.path.getsize(file_path)
+        temp_dir = tempfile.mkdtemp()
+        file_path = os.path.join(temp_dir, file.filename)
+        file.save(file_path)
+        file_size = os.path.getsize(file_path)
 
-            yield json.dumps({"step": "saved", "progress": 10, "message": f"File saved ({file_size / 1024:.1f} KB)"}) + "\n"
+        q.put(json.dumps({"step": "saving", "progress": 5, "message": "Saving uploaded file..."}) + "\n")
+        q.put(json.dumps({"step": "saved", "progress": 10, "message": f"File saved ({file_size / 1024:.1f} KB)"}) + "\n")
 
-            # Progress callback — collects lines (no yield in nested func!)
-            def on_progress(step, progress, message):
-                mapped_progress = 10 + int(progress * 0.9)
-                progress_lines.append(json.dumps({"step": step, "progress": mapped_progress, "message": message}) + "\n")
+        def on_progress(step, progress, message):
+            mapped_progress = 10 + int(progress * 0.9)
+            q.put(json.dumps({"step": step, "progress": mapped_progress, "message": message}) + "\n")
 
-            # Run ingestion with progress callback
-            result = run_full_ingestion_for_user(file_path, user_id, progress_callback=on_progress)
+        def worker():
+            try:
+                result = run_full_ingestion_for_user(file_path, user_id, progress_callback=on_progress)
+                q.put(json.dumps(result) + "\n")
+            except Exception as e:
+                logger.error(f"Upload worker failed: {traceback.format_exc()}")
+                q.put(json.dumps({"step": "error", "progress": 100, "message": f"Failed: {str(e)}"}) + "\n")
+            finally:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                q.put(SENTINEL)
 
-            # Yield collected progress lines
-            for line in progress_lines:
-                yield line
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
 
-            # Yield the final result
-            yield json.dumps(result) + "\n"
-
-            # Cleanup temp file
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-        except Exception as e:
-            logger.error(f"Upload failed: {traceback.format_exc()}")
-            yield json.dumps({"step": "error", "progress": 100, "message": f"Failed: {str(e)}"}) + "\n"
+        while True:
+            item = q.get()
+            if item is SENTINEL:
+                break
+            yield item
 
     return Response(
         stream_with_context(generate_progress()),
@@ -912,12 +939,16 @@ def list_documents(user_id: int):
 
 @app.route("/api/v1/documents/<int:user_id>", methods=["DELETE"])
 def delete_documents(user_id: int):
-    delete_user_collection(user_id)
-    # Also cleanup user data directory
-    user_data_dir = os.path.join(os.path.dirname(__file__), "data", f"user_{user_id}")
-    if os.path.exists(user_data_dir):
-        shutil.rmtree(user_data_dir, ignore_errors=True)
-    return jsonify({"message": f"All documents for user {user_id} deleted"})
+    with get_user_lock(user_id):
+        delete_user_collection(user_id)
+        # Also cleanup user data directory
+        user_data_dir = os.path.join(os.path.dirname(__file__), "data", f"user_{user_id}")
+        if os.path.exists(user_data_dir):
+            try:
+                shutil.rmtree(user_data_dir, ignore_errors=True)
+            except Exception as e:
+                logger.warning(f"Failed to delete user directory: {e}")
+        return jsonify({"message": f"All documents for user {user_id} deleted"})
 
 
 @app.route("/api/v1/stats", methods=["GET"])
