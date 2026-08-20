@@ -1,0 +1,144 @@
+{
+  "metadata": {
+    "server": "http://localhost:5000",
+    "user_id": 3,
+    "in_domain_count": 10,
+    "ood_count": 20,
+    "top_k": 20,
+    "evaluation_time": "2026-08-20 13:24:33"
+  },
+  "baseline": {
+    "threshold": 0.0,
+    "in_domain_metrics": {
+      "precision@1": 0.7,
+      "recall@1": 0.2667,
+      "precision@3": 0.3333,
+      "recall@3": 0.3833,
+      "precision@5": 0.22,
+      "recall@5": 0.4167,
+      "precision@10": 0.14,
+      "recall@10": 0.5333,
+      "mrr": 0.7083,
+      "map": 0.4507,
+      "ndcg@5": 0.4591,
+      "hit_rate": 0.8
+    },
+    "ood_metrics": {
+      "ood_rejection_accuracy": 0.0,
+      "false_retrieval_rate": 1.0,
+      "no_answer_accuracy": 0.0
+    }
+  },
+  "threshold_analysis": [
+    {
+      "threshold": 0.2,
+      "recall@5": 0.4167,
+      "precision@5": 0.22,
+      "mrr": 0.7,
+      "hit_rate": 0.7,
+      "ood_rejection_accuracy": 0.75,
+      "false_retrieval_rate": 0.25,
+      "overall_accuracy": 0.7333,
+      "composite_score": 0.6433
+    },
+    {
+      "threshold": 0.25,
+      "recall@5": 0.4167,
+      "precision@5": 0.22,
+      "mrr": 0.7,
+      "hit_rate": 0.7,
+      "ood_rejection_accuracy": 1.0,
+      "false_retrieval_rate": 0.0,
+      "overall_accuracy": 0.9,
+      "composite_score": 0.785
+    },
+    {
+      "threshold": 0.3,
+      "recall@5": 0.4167,
+      "precision@5": 0.22,
+      "mrr": 0.7,
+      "hit_rate": 0.7,
+      "ood_rejection_accuracy": 1.0,
+      "false_retrieval_rate": 0.0,
+      "overall_accuracy": 0.9,
+      "composite_score": 0.785
+    },
+    {
+      "threshold": 0.35,
+      "recall@5": 0.3167,
+      "precision@5": 0.18,
+      "mrr": 0.6,
+      "hit_rate": 0.6,
+      "ood_rejection_accuracy": 1.0,
+      "false_retrieval_rate": 0.0,
+      "overall_accuracy": 0.8667,
+      "composite_score": 0.7417
+    },
+    {
+      "threshold": 0.4,
+      "recall@5": 0.25,
+      "precision@5": 0.14,
+      "mrr": 0.5,
+      "hit_rate": 0.5,
+      "ood_rejection_accuracy": 1.0,
+      "false_retrieval_rate": 0.0,
+      "overall_accuracy": 0.8333,
+      "composite_score": 0.7083
+    },
+    {
+      "threshold": 0.45,
+      "recall@5": 0.0333,
+      "precision@5": 0.02,
+      "mrr": 0.1,
+      "hit_rate": 0.1,
+      "ood_rejection_accuracy": 1.0,
+      "false_retrieval_rate": 0.0,
+      "overall_accuracy": 0.7,
+      "composite_score": 0.59
+    },
+    {
+      "threshold": 0.5,
+      "recall@5": 0.0,
+      "precision@5": 0.0,
+      "mrr": 0.0,
+      "hit_rate": 0.0,
+      "ood_rejection_accuracy": 1.0,
+      "false_retrieval_rate": 0.0,
+      "overall_accuracy": 0.6667,
+      "composite_score": 0.5667
+    },
+    {
+      "threshold": 0.55,
+      "recall@5": 0.0,
+      "precision@5": 0.0,
+      "mrr": 0.0,
+      "hit_rate": 0.0,
+      "ood_rejection_accuracy": 1.0,
+      "false_retrieval_rate": 0.0,
+      "overall_accuracy": 0.6667,
+      "composite_score": 0.5667
+    },
+    {
+      "threshold": 0.6,
+      "recall@5": 0.0,
+      "precision@5": 0.0,
+      "mrr": 0.0,
+      "hit_rate": 0.0,
+      "ood_rejection_accuracy": 1.0,
+      "false_retrieval_rate": 0.0,
+      "overall_accuracy": 0.6667,
+      "composite_score": 0.5667
+    }
+  ],
+  "optimal_threshold": {
+    "threshold": 0.25,
+    "recall@5": 0.4167,
+    "precision@5": 0.22,
+    "mrr": 0.7,
+    "hit_rate": 0.7,
+    "ood_rejection_accuracy": 1.0,
+    "false_retrieval_rate": 0.0,
+    "overall_accuracy": 0.9,
+    "composite_score": 0.785
+  }
+}

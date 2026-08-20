@@ -27,3 +27,7 @@ Thumbs.db
 rag-service/data/
 rag-service/*.log
 rag-service/src/rag_system/data/
+
+# Python bytecode generated while running the local RAG service
+__pycache__/
+*.py[cod]

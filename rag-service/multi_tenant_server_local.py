@@ -748,6 +748,10 @@ def chat():
             collection_name=collection,
             query=q_vector,
             limit=initial_k,
+            # Enforce the no-answer policy at retrieval time.  Without this,
+            # vector search always returns the nearest chunks, even for an
+            # out-of-domain question with no supporting context.
+            score_threshold=DEFAULT_CONFIG.similarity_threshold,
         )
 
         all_points = search_result.points if search_result.points else []
@@ -1136,6 +1140,128 @@ def user_metrics(user_id: int):
 
     except Exception as e:
         logger.error(f"Metrics evaluation failed: {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/v1/search", methods=["POST"])
+def search_raw():
+    """
+    Raw search endpoint for evaluation.
+    Returns candidates with raw dense scores (no reranking).
+    Accepts a threshold parameter to filter results.
+    """
+    data = request.json or {}
+    user_id = data.get("user_id")
+    query = data.get("query", "").strip()
+    top_k = int(data.get("top_k", 20))
+    threshold = float(data.get("threshold", 0.0))  # 0 = no filtering
+
+    if not user_id or not query:
+        return jsonify({"error": "user_id and query are required"}), 400
+
+    user_id = int(user_id)
+    collection = user_collection_name(user_id)
+
+    try:
+        col_info = qdrant_client.get_collection(collection_name=collection)
+        if col_info.points_count == 0:
+            return jsonify({"query": query, "results": [], "total": 0})
+    except Exception:
+        return jsonify({"query": query, "results": [], "total": 0})
+
+    try:
+        # Language detection + Arabic expansion
+        lang = detect_language(query)
+        _AR_EN_MEDICAL = {
+            'مرض السكري': 'diabetes mellitus',
+            'السكري': 'diabetes',
+            'نوع السكري': 'types of diabetes',
+            'انواع مرض السكري': 'types of diabetes mellitus',
+            'الغدة': 'endocrine gland',
+            'القلب': 'cardiovascular',
+            'ضغط الدم': 'blood pressure',
+        }
+        expanded_parts = [query.strip()]
+        if lang == 'arabic':
+            for ar_term, en_term in _AR_EN_MEDICAL.items():
+                if ar_term in query:
+                    expanded_parts.append(en_term)
+        expanded_query_text = ' '.join(expanded_parts)
+
+        # Embed query
+        from rag_system.retriever.query_embedder import QueryEmbedder
+        import copy
+        processor = QueryProcessor()
+        query_obj = processor.process(query)
+        embedder = QueryEmbedder(cfg=DEFAULT_CONFIG)
+        expanded_query_obj = copy.deepcopy(query_obj)
+        if hasattr(expanded_query_obj, 'text'):
+            expanded_query_obj.text = expanded_query_text
+        elif hasattr(expanded_query_obj, 'processed_query'):
+            expanded_query_obj.processed_query = expanded_query_text
+        elif hasattr(expanded_query_obj, 'raw_query'):
+            expanded_query_obj.raw_query = expanded_query_text
+        q_vector = embedder.embed_query(expanded_query_obj)
+
+        # Search with high initial_k for thorough evaluation
+        initial_k = min(max(top_k * 3, 50), 100)
+        search_result = qdrant_client.query_points(
+            collection_name=collection,
+            query=q_vector,
+            limit=initial_k,
+        )
+
+        all_points = search_result.points if search_result.points else []
+
+        # Dedup + build results with raw dense scores
+        import re as _re
+        seen_contents = set()
+        results = []
+        for point in all_points:
+            payload = point.payload or {}
+            content = payload.get("content", "")
+            meta = payload.get("metadata", {})
+            raw_score = round(point.score, 4)
+
+            # Apply threshold filter
+            if raw_score < threshold:
+                continue
+
+            if not content or len(content.strip()) < 30:
+                continue
+            content_key = content[:200].strip().lower()
+            content_hash = hash(content_key)
+            if content_hash in seen_contents:
+                continue
+            seen_contents.add(content_hash)
+
+            results.append({
+                "chunk_id": payload.get("chunk_id", str(point.id)),
+                "content": content[:300],
+                "dense_score": raw_score,
+                "page_start": meta.get("page_start", "?"),
+                "page_end": meta.get("page_end", "?"),
+                "chapter": meta.get("chapter", ""),
+                "section": meta.get("section", ""),
+                "subsection": meta.get("subsection", ""),
+                "document_title": meta.get("document_title", ""),
+                "token_count": meta.get("token_count", 0),
+            })
+            if len(results) >= top_k:
+                break
+
+        return jsonify({
+            "query": query,
+            "expanded_query": expanded_query_text if lang == 'arabic' else None,
+            "language": lang,
+            "results": results,
+            "total": len(results),
+            "threshold": threshold,
+            "total_vectors": col_info.points_count,
+        })
+
+    except Exception as e:
+        logger.error(f"Search failed: {traceback.format_exc()}")
         return jsonify({"error": str(e)}), 500
 
 

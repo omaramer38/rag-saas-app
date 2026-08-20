@@ -1,0 +1,256 @@
+{
+  "version": "2.0",
+  "description": "Production-grade evaluation dataset for WHO diabetes guideline RAG system. Updated with current chunk IDs.",
+  "schema": {
+    "query": "The question to evaluate",
+    "type": "in_domain | out_of_domain",
+    "relevant_chunks": {
+      "chunk_id": {"relevance": "0|1|2", "reason": "Why this relevance level"}
+    },
+    "gold_answer": "NOT_FOUND for OOD, or text for in-domain",
+    "expected_behavior": "reject for OOD, retrieve for in-domain"
+  },
+
+  "in_domain_queries": [
+    {
+      "query": "What is diabetes?",
+      "relevant_chunks": {
+        "chk_e3c85f0e_0008": {"relevance": 2, "reason": "Glossary > Introduction: defines diabetes mellitus as chronic metabolic disorder"},
+        "chk_e3c85f0e_0001": {"relevance": 1, "reason": "Front Matter: executive overview mentions diabetes"},
+        "chk_e3c85f0e_0010": {"relevance": 1, "reason": "Glossary > 1.1 Scope: mentions diabetes guidelines"}
+      }
+    },
+    {
+      "query": "What is type 2 diabetes?",
+      "relevant_chunks": {
+        "chk_e3c85f0e_0006": {"relevance": 2, "reason": "Glossary > SGLT-2: describes type 2 diabetes treatment context"},
+        "chk_e3c85f0e_0008": {"relevance": 1, "reason": "Glossary > Introduction: mentions type 2 diabetes as most common form"},
+        "chk_e3c85f0e_0018": {"relevance": 1, "reason": "Main Body > 3.1: second-line treatment for type 2 diabetes"}
+      }
+    },
+    {
+      "query": "What is metformin?",
+      "relevant_chunks": {
+        "chk_e3c85f0e_0018": {"relevance": 2, "reason": "Main Body > 3.1: describes metformin as biguanide, mechanism, dosage"},
+        "chk_e3c85f0e_0005": {"relevance": 1, "reason": "Glossary > Diabetic ketoacidosis: mentions metformin context"},
+        "chk_e3c85f0e_0006": {"relevance": 1, "reason": "Glossary > SGLT-2: mentions metformin as first-line"}
+      }
+    },
+    {
+      "query": "What are the types of diabetes?",
+      "relevant_chunks": {
+        "chk_e3c85f0e_0008": {"relevance": 2, "reason": "Glossary > Introduction: defines diabetes and mentions Type 1, Type 2"},
+        "chk_e3c85f0e_0006": {"relevance": 1, "reason": "Glossary > SGLT-2: mentions type 2 diabetes agents"},
+        "chk_e3c85f0e_0001": {"relevance": 1, "reason": "Front Matter: overview mentions diabetes types"}
+      }
+    },
+    {
+      "query": "ايه هو مرض السكري؟",
+      "relevant_chunks": {
+        "chk_e3c85f0e_0008": {"relevance": 2, "reason": "Glossary > Introduction: diabetes definition (Arabic query targets same content)"},
+        "chk_e3c85f0e_0005": {"relevance": 1, "reason": "Glossary > Diabetic ketoacidosis: diabetes-related content"},
+        "chk_e3c85f0e_0010": {"relevance": 1, "reason": "Glossary > 1.1 Scope: mentions diabetes guidelines"}
+      }
+    },
+    {
+      "query": "ايه انواع مرض السكري؟",
+      "relevant_chunks": {
+        "chk_e3c85f0e_0008": {"relevance": 2, "reason": "Glossary > Introduction: mentions diabetes types"},
+        "chk_e3c85f0e_0005": {"relevance": 1, "reason": "Glossary > Diabetic ketoacidosis: mentions diabetes types"},
+        "chk_e3c85f0e_0006": {"relevance": 1, "reason": "Glossary > SGLT-2: mentions type 2 diabetes"}
+      }
+    },
+    {
+      "query": "What insulin should be used for type 2 diabetes?",
+      "relevant_chunks": {
+        "chk_e3c85f0e_0025": {"relevance": 2, "reason": "Main Body > 3.3 Insulin: details insulin types and dosing for type 2"},
+        "chk_e3c85f0e_0018": {"relevance": 1, "reason": "Main Body > 3.1: mentions when to add insulin therapy"}
+      }
+    },
+    {
+      "query": "What are the side effects of metformin?",
+      "relevant_chunks": {
+        "chk_e3c85f0e_0018": {"relevance": 2, "reason": "Main Body > 3.1: mentions GI side effects and contraindications of metformin"},
+        "chk_e3c85f0e_0019": {"relevance": 1, "reason": "Main Body > 3.1: continuation of metformin discussion"}
+      }
+    },
+    {
+      "query": "How to monitor blood glucose?",
+      "relevant_chunks": {
+        "chk_e3c85f0e_0008": {"relevance": 1, "reason": "Glossary > Introduction: mentions blood glucose monitoring targets"},
+        "chk_e3c85f0e_0030": {"relevance": 2, "reason": "Main Body > 4.2 Insulin: discusses blood glucose monitoring with insulin therapy"},
+        "chk_e3c85f0e_0031": {"relevance": 1, "reason": "Main Body > 5.3 Evaluation: mentions monitoring and evaluation"}
+      }
+    },
+    {
+      "query": "ما هي انواع الانسولين؟",
+      "relevant_chunks": {
+        "chk_e3c85f0e_0025": {"relevance": 2, "reason": "Main Body > 3.3 Insulin: lists insulin types (rapid-acting, short-acting, long-acting)"},
+        "chk_e3c85f0e_0018": {"relevance": 1, "reason": "Main Body > 3.1: mentions insulin therapy context"}
+      }
+    }
+  ],
+
+  "out_of_domain_queries": [
+    {
+      "query": "What is the capital of France?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "geography"
+    },
+    {
+      "query": "Who wrote Romeo and Juliet?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "literature"
+    },
+    {
+      "query": "How do I make pasta carbonara?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "cooking"
+    },
+    {
+      "query": "What is the speed of light?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "physics"
+    },
+    {
+      "query": "Who won the 2024 FIFA World Cup?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "sports"
+    },
+    {
+      "query": "What is machine learning?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "programming"
+    },
+    {
+      "query": "What is Bitcoin and how does it work?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "finance"
+    },
+    {
+      "query": "When did World War II end?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "history"
+    },
+    {
+      "query": "ما هي عاصمة مصر؟",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "geography_arabic"
+    },
+    {
+      "query": "كيف أطبخ الأرز بالمرقة؟",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "cooking_arabic"
+    },
+    {
+      "query": "What is Alzheimer's disease treatment?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "medical_not_covered"
+    },
+    {
+      "query": "How to treat depression?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "medical_not_covered"
+    },
+    {
+      "query": "What are the symptoms of COVID-19?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "medical_not_covered"
+    },
+    {
+      "query": "What is the GDP of Egypt?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "economics"
+    },
+    {
+      "query": "How does photosynthesis work?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "biology"
+    },
+    {
+      "query": "ما هو الذكاء الاصطناعي؟",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "technology_arabic"
+    },
+    {
+      "query": "Who is the current president of the United States?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "politics"
+    },
+    {
+      "query": "What is the boiling point of water?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "chemistry"
+    },
+    {
+      "query": "How to invest in stocks?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "finance"
+    },
+    {
+      "query": "What is the Pythagorean theorem?",
+      "type": "out_of_domain",
+      "gold_answer": "NOT_FOUND",
+      "gold_chunks": [],
+      "expected_behavior": "reject",
+      "category": "mathematics"
+    }
+  ]
+}

@@ -65,6 +65,7 @@ class FileController extends Controller
             });
 
             $status = $result['step'] === 'completed' ? 'ready' : 'failed';
+            $totalChunks = $this->processedChunkCount($result);
 
             $doctorFile->update([
                 'status' => $status,
@@ -72,7 +73,7 @@ class FileController extends Controller
                 'processed_at' => now(),
                 'processing_metrics' => [
                     'quality_metrics' => $result['quality_metrics'] ?? [],
-                    'total_chunks' => $result['total_chunks'] ?? 0,
+                    'total_chunks' => $totalChunks,
                     'total_vectors' => $result['total_vectors'] ?? 0,
                     'processing_time_ms' => $result['processing_time_ms'] ?? 0,
                     'collection' => $result['collection'] ?? '',
@@ -85,7 +86,7 @@ class FileController extends Controller
             // Store final result for frontend polling
             cache()->put("file_result_{$doctorFile->id}", [
                 'success' => $status === 'ready',
-                'chunks' => $result['total_chunks'] ?? 0,
+                'chunks' => $totalChunks,
                 'vectors' => $result['total_vectors'] ?? 0,
                 'metrics' => $result['quality_metrics'] ?? [],
                 'processing_time_ms' => $result['processing_time_ms'] ?? 0,
@@ -98,14 +99,14 @@ class FileController extends Controller
             if ($request->expectsJson() || $request->header('X-Requested-With') === 'XMLHttpRequest') {
                 return response()->json([
                     'success' => true,
-                    'message' => "File processed! {$result['total_chunks']} chunks indexed.",
+                    'message' => "File processed! {$totalChunks} chunks indexed.",
                     'file_id' => $doctorFile->id,
                     'status' => $status,
                 ]);
             }
 
             return redirect()->route('doctor.files.index')
-                ->with('success', "File processed! {$result['total_chunks']} chunks indexed.");
+                ->with('success', "File processed! {$totalChunks} chunks indexed.");
 
         } catch (\Exception $e) {
             Log::error('RAG processing failed', [
@@ -217,6 +218,16 @@ class FileController extends Controller
         ];
 
         return implode("\n", $lines);
+    }
+
+    /**
+     * A streaming RAG response may omit optional processing metrics.  A
+     * completed upload must still be persisted instead of failing while
+     * constructing its UI success message.
+     */
+    private function processedChunkCount(array $result): int
+    {
+        return (int) ($result['total_chunks'] ?? 0);
     }
 
     private function deleteFile(DoctorFile $file): void
